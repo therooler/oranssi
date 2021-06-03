@@ -42,7 +42,7 @@ def get_su_4_operators(identity: bool = False) -> List[np.ndarray]:
     else:
         paulis = [X, Y, Z]
     operators = []
-    for comb in it.product(list(range(4)), repeat=2):
+    for comb in it.product(list(range(len(paulis))), repeat=2):
         operators.append(np.kron(paulis[comb[0]], paulis[comb[1]]))
     return operators
 

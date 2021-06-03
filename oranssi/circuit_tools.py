@@ -1,10 +1,7 @@
 import pennylane as qml
 import numpy as np
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 import copy
-import scipy.linalg as ssla
-import matplotlib.pyplot as plt
-from utils import get_su_2_operators, get_su_4_operators
 
 
 def retraction(circuit, observable, wires, eta):
@@ -39,7 +36,7 @@ def param_shift_comm(rho: np.ndarray, gate) -> np.ndarray:
     return gate(np.pi / 2) @ (rho @ gate(np.pi / 2).conj().T) - gate(-np.pi / 2) @ (rho @ gate(-np.pi / 2).conj().T)
 
 
-def get_full_operator(op: np.ndarray, wires: Tuple[int], nqubits: int) -> np.ndarray:
+def get_full_operator(op: np.ndarray, wires: Tuple[int,...], nqubits: int) -> np.ndarray:
     """
     Takes a local operator `op` acting on `wires` and promotes it to an operatr on the full unitary space
     C^{2^n x 2^n}.
