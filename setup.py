@@ -7,5 +7,5 @@ setup(name='oranssi',
       author='Roeland Wiersema',
       author_email='',
       url='',
-      packages=['oranssi', 'oranssi.circuit_tools', 'oranssi.optimizers', 'oranssi.utils'],
+      packages=['oranssi'],
      )
