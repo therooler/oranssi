@@ -1,8 +1,8 @@
 import pytest
 import pennylane as qml
 import numpy as np
-from oranssi.optimizers import exact_lie_optimizer, local_su_2_lie_optimizer
-from test_fixtures import circuit_1, circuit_1_bad_return_types
+from oranssi.optimizers import exact_lie_optimizer, local_su_4_lie_optimizer
+from test_fixtures import circuit_1, circuit_2, circuit_1_bad_return_types
 
 
 def test_observables_exact_lie_optimizer(circuit_1):
@@ -74,3 +74,11 @@ def test_circuit_exact_lie_optimizer(circuit_1_bad_return_types):
     params = [0.1, 1.2]
     with pytest.raises(AssertionError, match='`circuit` must return a state'):
         exact_lie_optimizer(circuit, params, observables, device, eta=0.2)
+
+
+def test_circuit_local_su_4_lie_optimizer(circuit_2):
+    circuit, device, param_shape = circuit_2
+    observables = [qml.PauliX(1)]
+    params = [0.1, 1.2]
+    with pytest.raises(AssertionError, match='`nqubits` must be even, received'):
+        local_su_4_lie_optimizer(circuit, params, observables, device, eta=0.2)
