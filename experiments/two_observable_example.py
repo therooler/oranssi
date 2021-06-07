@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pennylane as qml
 from oranssi.optimizers import exact_lie_optimizer, local_su_2_lie_optimizer, \
-    local_su_4_lie_optimizer, su_local_layer_lie_optimizer
+    local_su_4_lie_optimizer
 
 
 def main():
