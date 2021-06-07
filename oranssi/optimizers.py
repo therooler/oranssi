@@ -321,11 +321,11 @@ class LocalLieLayer(object):
                 for i in range(1, nqubits, 2):
                     self.full_paulis.append([get_full_operator(p, (i, i + 1), self.nqubits) for p in self.paulis])
                 self.full_paulis.append([get_full_operator(p, (nqubits-1, 0), self.nqubits) for p in self.paulis])
-
+        self.op = np.zeros((2 ** self.nqubits, 2 ** self.nqubits), dtype=complex)
                 
     def __call__(self, circuit_unitary, *args, **kwargs):
         for full_paulis in self.full_paulis:
-            op = np.zeros((2 ** self.nqubits, 2 ** self.nqubits), dtype=complex)
+            self.op.fill(0)
             for obs in self.observables:
                 omegas = []
                 full_obs = get_full_operator(obs.matrix, obs.wires, self.nqubits)
@@ -333,8 +333,8 @@ class LocalLieLayer(object):
                 phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
                 for j, pauli in enumerate(full_paulis):
                     omegas.append(phi.conj().T @ (pauli @ full_obs - full_obs @ pauli) @ phi)
-                op += sum(omegas[i] *  pauli for i, pauli in enumerate(full_paulis))
-            U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * op)
+                self.op += sum(omegas[i] *  pauli for i, pauli in enumerate(full_paulis))
+            U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
             if self.unitary_error_check:
                 unitary_error = np.max(
                     np.abs(U_riemann_approx @ U_riemann_approx.conj().T - np.eye(2 ** self.nqubits, **self.nqubits)))
