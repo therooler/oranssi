@@ -32,7 +32,7 @@ def main():
     plt.xlabel('Step')
     plt.ylabel(r'$\langle X_2 \rangle$')
     plt.title(fr'Different optimizers for $\eta = {0.2}$')
-    plt.savefig('./figures' + f'/local_lie_optimizers_nq_{nqubits}_{0.2:1.3f}.pdf')
+    plt.savefig('./figures' + f'/single_observable_local_lie_optimizers_nq_{nqubits}_{0.2:1.3f}.pdf')
     plt.show()
 
 
