@@ -1,6 +1,7 @@
 import numpy as np
 from typing import List
 import itertools as it
+import os
 
 
 def get_su_2_operators(identity: bool = False) -> List[np.ndarray]:
@@ -58,3 +59,10 @@ def operator_2_norm(R: np.ndarray) -> float:
         Scalar corresponding to the norm
     """
     return np.sqrt(np.trace(R.conjugate().transpose() @ R))
+
+
+def save_path_creator(path, experiment_name):
+    save_path = os.path.join(path, experiment_name)
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    return save_path
