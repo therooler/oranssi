@@ -2,7 +2,7 @@ import pennylane as qml
 import numpy as np
 import scipy.linalg as ssla
 
-from typing import List, Tuple, Any
+from typing import List, Any
 from collections.abc import Iterable
 from itertools import cycle
 
@@ -84,7 +84,7 @@ def exact_lie_optimizer(circuit, params: List, observables: List, device: qml.De
             # avoid matrix exponential by diagonalizing
             S, V = np.linalg.eigh(H)
             U_riemann_exact = (V @ np.diag(np.exp(-1j * eta / 2 * S)) @ V.conj().T)
-            # update the circuit unitary :TODO is this correct? Do we split on observables?
+            # update the circuit unitary
             circuit_unitary = U_riemann_exact @ circuit_unitary
         for o in observables:
             # update cost
@@ -353,7 +353,7 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
     else:
         return cost_exact
 
-
+#TODO figure out why there are differences with PS, minus sign somewhere?
 class LocalLieLayer(object):
     def __init__(self, state_qnode, observables: List, locality: int, nqubits: int, **kwargs):
         """
