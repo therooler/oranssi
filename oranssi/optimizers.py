@@ -1,7 +1,11 @@
 import pennylane as qml
 import numpy as np
-from typing import List
 import scipy.linalg as ssla
+
+from typing import List, Tuple, Any
+from collections.abc import Iterable
+from itertools import cycle
+
 from oranssi.circuit_tools import get_full_operator, get_ops_from_qnode, circuit_state_from_unitary, \
     circuit_observable_from_unitary, param_shift_comm
 from oranssi.utils import get_su_2_operators, get_su_4_operators
@@ -53,7 +57,7 @@ def exact_lie_optimizer(circuit, params: List, observables: List, device: qml.De
     print(f"- Riemannian optimization on SU(p) with matrix exponential -")
     print(f"------------------------------------------------------------")
     print(f"nqubits = {nqubits} \nlearning rate = {eta} \nconvergence tolerance {tol}")
-    print(f"---------------------------------------------------")
+    print(f"------------------------------------------------------------")
     # convert the circuit to a single unitary
     circuit_unitary = np.eye(2 ** nqubits, 2 ** nqubits, dtype=complex)
     for op, wires in zip(circuit_as_numpy_ops, circuit_as_numpy_wires):
@@ -82,6 +86,7 @@ def exact_lie_optimizer(circuit, params: List, observables: List, device: qml.De
             U_riemann_exact = (V @ np.diag(np.exp(-1j * eta / 2 * S)) @ V.conj().T)
             # update the circuit unitary :TODO is this correct? Do we split on observables?
             circuit_unitary = U_riemann_exact @ circuit_unitary
+        for o in observables:
             # update cost
             cost_exact[step + 1] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
                                                                           observable=o)
@@ -142,7 +147,7 @@ def local_su_2_lie_optimizer(circuit, params: List, observables: List, device: q
     print(f"- Riemannian optimization on SU(p)_loc_2 with matrix exponential -")
     print(f"------------------------------------------------------------------")
     print(f"nqubits = {nqubits} \nlearning rate = {eta} \nconvergence tolerance {tol}")
-    print(f"----------------------------------------------------------------")
+    print(f"------------------------------------------------------------------")
 
     circuit_unitary = np.eye(2 ** nqubits, 2 ** nqubits, dtype=complex)
     for op, wires in zip(circuit_as_numpy_ops, circuit_as_numpy_wires):
@@ -152,7 +157,7 @@ def local_su_2_lie_optimizer(circuit, params: List, observables: List, device: q
 
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
     circuit_observable_from_unitary_qnode = qml.QNode(circuit_observable_from_unitary, device)
-    lie_layer = LocalLieLayer(circuit_state_from_unitary_qnode, observables, 1, nqubits, eta=eta)
+    lie_layer = LocalLieLayer(circuit_state_from_unitary_qnode, observables, 1, nqubits, **kwargs)
 
     cost_exact.append(0)
     for obs in observables:
@@ -219,7 +224,7 @@ def local_su_4_lie_optimizer(circuit, params: List, observables: List, device: q
     print(f"- Riemannian optimization on SU(p)_loc_4 with matrix exponential -")
     print(f"------------------------------------------------------------------")
     print(f"nqubits = {nqubits} \nlearning rate = {eta} \nconvergence tolerance {tol}")
-    print(f"----------------------------------------------------------------")
+    print(f"------------------------------------------------------------------")
 
     circuit_unitary = np.eye(2 ** nqubits, 2 ** nqubits, dtype=complex)
     for op, wires in zip(circuit_as_numpy_ops, circuit_as_numpy_wires):
@@ -229,7 +234,7 @@ def local_su_4_lie_optimizer(circuit, params: List, observables: List, device: q
 
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
     circuit_observable_from_unitary_qnode = qml.QNode(circuit_observable_from_unitary, device)
-    lie_layer = LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, nqubits, eta=eta)
+    lie_layer = LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, nqubits, **kwargs)
 
     cost_exact.append(0)
     for obs in observables:
@@ -248,8 +253,127 @@ def local_su_4_lie_optimizer(circuit, params: List, observables: List, device: q
     return cost_exact
 
 
+def local_custom_su_lie_optimizer(circuit, params: List, observables: List, device: qml.Device,
+                                  layer_patern: Any, **kwargs):
+    """
+    Riemannian gradient flow on the local unitary group. Implements U_{k+1} = exp(-ia [rho, O]) U_k by projecting
+    the cost function onto SU(p)_loc_4 = (X) SU(4) by way of the matrix exponential. Not hardware
+    friendly.
+
+    Args:
+        circuit: Function with signature (params, **kwargs) that returns a PennyLane state or observable.
+        params: List of parameters for the circuit. If no parameters, should be empty list.
+        observables: List of PennyLane observables.
+        device: PennyLane device.
+        layer_patern: Pattern of the gates that should be applied
+        **kwargs: Possible optimizer arguments:
+            - nsteps: Maximum steps for the optimizer to take.
+            - eta: Learning rate.
+            - tol: Tolerance on the cost for early stopping.
+
+    Returns:
+        List of floats corresponding to the cost.
+    """
+    assert all(isinstance(o, (qml.PauliX, qml.PauliY, qml.PauliZ)) for o in observables), \
+        f"Only Pauli Observables are supported, received " \
+        f"{[o for o in observables if not isinstance(o, (qml.PauliX, qml.PauliY, qml.PauliZ))]}"
+    if hasattr(circuit(params), 'return_type'):
+        assert circuit(
+            params).return_type.name == 'State', f"`circuit` must return a state, received" \
+                                                 f" {circuit(params).return_type}"
+    else:
+        raise AssertionError(f"`circuit` must return a state, received"
+                             f"received {type(circuit(params))}")
+    assert all(len(obs.wires) == 1 for obs in
+               observables), 'Only single qubit observables are implemented currently'
+    circuit_as_numpy_ops, circuit_as_numpy_wires = get_ops_from_qnode(circuit, params, device)
+    nqubits = len(device.wires)
+
+    assert isinstance(layer_patern, Iterable) & all(isinstance(i, tuple) for i in layer_patern), \
+        f'`layer_pattern` must be an iterable of tuples, received {layer_patern}'
+    assert all(len(i) == 2 for i in layer_patern), \
+        f'`layer_pattern` must be an iterable of tuples of length 2, received {layer_patern}'
+    assert all(i[0] in [1, 2] for i in layer_patern), 'The tuples in `layer_patern` must have as first entry integers ' \
+                                                      'in [1, 2] that indicate the whether we apply a SU(2) or SU(4) ' \
+                                                      f'layer, received {list(i[0] for i in layer_patern)}'
+    assert all(i[1] in [0, 1] for i in layer_patern), 'The tuples in `layer_patern` must have as first entry integers ' \
+                                                      'in [0, ] that indicate the stride of the layer, ' \
+                                                      f'received {list(i[1] for i in layer_patern)}'
+
+    nsteps_optimizer = kwargs.get('nsteps', 40)
+    assert (isinstance(nsteps_optimizer, int) & (1 <= nsteps_optimizer <= np.inf)), \
+        f'`nsteps` must be an integer between 0 and infinity, received {nsteps_optimizer}'
+    eta = kwargs.get('eta', 0.1)
+    assert (isinstance(eta, float) & (0. <= eta <= 1.)), \
+        f'`eta` must be an float between 0 and 1, received {eta}'
+    tol = kwargs.get('tol', 1e-3)
+    assert (isinstance(tol, float) & (0. <= tol <= np.inf)), \
+        f'`tol` must be an float between 0 and infinity, received {tol}'
+    return_state= kwargs.get('return_state', False)
+    assert (isinstance(return_state, bool) & (0. <= tol <= np.inf)), \
+        f'`return_state` must be a boolean, received {return_state}'
+
+    print(f"-------------------------------------------------------------------")
+    print(f"- Riemannian optimization on custom SU(p) with matrix exponential -")
+    print(f"-------------------------------------------------------------------")
+    print(f"nqubits = {nqubits} \nlearning rate = {eta} \nconvergence tolerance {tol}")
+    print(f"-------------------------------------------------------------------")
+
+    circuit_unitary = np.eye(2 ** nqubits, 2 ** nqubits, dtype=complex)
+    for op, wires in zip(circuit_as_numpy_ops, circuit_as_numpy_wires):
+        circuit_unitary = get_full_operator(op, wires, nqubits) @ circuit_unitary
+
+    cost_exact = []
+    states = []
+    circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
+    circuit_observable_from_unitary_qnode = qml.QNode(circuit_observable_from_unitary, device)
+    lie_layers = []
+    for locality, stride in layer_patern:
+        kwargs['stride'] = stride
+        lie_layers.append(LocalLieLayer(circuit_state_from_unitary_qnode, observables, locality, nqubits, **kwargs))
+    lie_layers = cycle(lie_layers)
+    cost_exact.append(0)
+    for obs in observables:
+        cost_exact[0] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
+                                                               observable=obs)
+    for step in range(nsteps_optimizer):
+        cost_exact.append(0)
+        circuit_unitary = next(lie_layers)(circuit_unitary)
+        if return_state:
+            states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
+        for o in observables:
+            cost_exact[step + 1] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary, observable=o)
+        if step > 2:
+            if np.isclose(cost_exact[-1], cost_exact[-2], atol=tol):
+                print(f'Cost difference between steps < {tol}, stopping early at step {step}...')
+                break
+    print(f"Final cost = {cost_exact[-1]}")
+    if return_state:
+        return cost_exact, states
+    else:
+        return cost_exact
+
+
 class LocalLieLayer(object):
-    def __init__(self, state_qnode, observables, locality: int, nqubits: int, **kwargs):
+    def __init__(self, state_qnode, observables: List, locality: int, nqubits: int, **kwargs):
+        """
+        Class that applies a Riemannian optimization step on a SU(2) or SU(4) local manifold.
+        Uses the matrix exponential to calculate the exact operator of the commutator.
+        Trotterization applies only on the level of observables, NOT on the level of individual SU(p) terms.
+
+        Args:
+            state_qnode: QNode of a circuit that takes a unitary and returns a state.
+            observables: List of single qubit Pauli observables.
+            locality: Either 1 or 2, indicating SU(2) or SU(4) local.
+            nqubits: The number of qubits in the circuit.
+            **kwargs: Additional keyword arguments are
+                - eta: the stepsize
+                - stride (SU(4) only) : Integer that indicates wether to start on qubit 0 or 1 with applying the
+                SU(4) operators
+                - unitary_error_check: Boolean that flags whether to check if the resulting unitary is a valid
+                unitary operator.
+                -
+        """
         self.state_qnode = state_qnode
         assert all(isinstance(o, (qml.PauliX, qml.PauliY, qml.PauliZ)) for o in observables), \
             f"Only Pauli Observables are supported, received " \
@@ -262,18 +386,26 @@ class LocalLieLayer(object):
         assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
             f'`eta` must be an float between 0 and 1, received {self.eta}'
         assert locality in [1, 2], f'Only SU(2) and SU(4) local are supported with `locality` in ' \
-                                   f'[0,1] respectively, received `locality` = {locality}'
+                                   f'[1,2] respectively, received `locality` = {locality}'
         self.locality = locality
         if locality == 2:
             assert (nqubits / 2 == nqubits // 2), f"`nqubits` must be even, received {nqubits}"
             self.paulis = get_su_4_operators()
             self.stride = kwargs.get('stride', 0)
+            assert self.stride in [0, 1], f'`stride` must be in [0,1], received {self.stride}'
         else:
             self.paulis = get_su_2_operators()
             self.stride = 0
         self.nqubits = nqubits
         self.unitary_error_check = kwargs.get('unitary_error_check', False)
+        assert isinstance(self.unitary_error_check, bool), f'`unitary_error_check` must be a boolean, ' \
+                                                           f'received {type(self.unitary_error_check)}'
+        self.trotterize = kwargs.get('trotterize', False)
+        assert isinstance(self.trotterize, bool), f'`trotterize` must be a boolean, ' \
+                                                  f'received {type(self.trotterize)}'
+        # depending on the locality, create the full pauli matrices required to calculate the commutators
         self.full_paulis = []
+
         if self.locality == 1:
             for i in range(self.nqubits):
                 self.full_paulis.append([get_full_operator(p, (i,), self.nqubits) for p in self.paulis])
@@ -282,30 +414,67 @@ class LocalLieLayer(object):
                 for i in range(0, nqubits, 2):
                     self.full_paulis.append([get_full_operator(p, (i, i + 1), self.nqubits) for p in self.paulis])
             else:
-                for i in range(1, nqubits, 2):
+                for i in range(self.stride, nqubits - 1, 2):
                     self.full_paulis.append([get_full_operator(p, (i, i + 1), self.nqubits) for p in self.paulis])
                 self.full_paulis.append([get_full_operator(p, (nqubits - 1, 0), self.nqubits) for p in self.paulis])
         self.op = np.zeros((2 ** self.nqubits, 2 ** self.nqubits), dtype=complex)
 
     def __call__(self, circuit_unitary, *args, **kwargs):
         for full_paulis in self.full_paulis:
-            self.op.fill(0)
             for obs in self.observables:
+                self.op.fill(0)
                 omegas = []
                 full_obs = get_full_operator(obs.matrix, obs.wires, self.nqubits)
 
                 phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
-                for j, pauli in enumerate(full_paulis):
-                    omegas.append(phi.conj().T @ (pauli @ full_obs - full_obs @ pauli) @ phi)
-                self.op += sum(omegas[i] * pauli for i, pauli in enumerate(full_paulis))
-            U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
-            if self.unitary_error_check:
-                unitary_error = np.max(
-                    np.abs(U_riemann_approx @ U_riemann_approx.conj().T - np.eye(2 ** self.nqubits, **self.nqubits)))
-                if unitary_error > 1e-8:
-                    print(f'WARNING: Unitary error = {unitary_error}, projecting onto unitary manifold by SVD')
-                    P, _, Q = np.linalg.svd(U_riemann_approx)
-                    U_riemann_approx = P @ Q
-            circuit_unitary = U_riemann_approx @ circuit_unitary
+                if self.trotterize:
+                    for j, pauli in enumerate(full_paulis):
+                        omega = phi.conj().T @ (pauli @ full_obs - full_obs @ pauli) @ phi
+                        self.op = omega * pauli
+                        U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
+                        if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
+                            U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
+
+                        circuit_unitary = U_riemann_approx @ circuit_unitary
+                        self.op.fill(0)
+                else:
+                    for j, pauli in enumerate(full_paulis):
+                        omegas.append(phi.conj().T @ (pauli @ full_obs - full_obs @ pauli) @ phi)
+
+                    self.op += sum(omegas[i] * pauli for i, pauli in enumerate(full_paulis))
+                    U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
+                    if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
+                        U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
+                    circuit_unitary = U_riemann_approx @ circuit_unitary
 
         return circuit_unitary
+
+    def _is_unitary(self, U):
+        """
+        Check that the matrix U is unitary.
+
+        Args:
+            U: M x M complex matrix.
+
+        Returns:
+            Boolean that indicates whether U is unitary
+        """
+        unitary_error = np.max(np.abs(U @ U.conj().T - np.eye(2 ** self.nqubits, 2 ** self.nqubits)))
+        if unitary_error > 1e-8:
+            print(f'WARNING: Unitary error = {unitary_error}, projecting onto unitary manifold by SVD')
+            return False
+        else:
+            return True
+
+    def _project_onto_unitary(self, U):
+        """
+        Use singular value decomposition to project the matrix U onto the Unitary manifold.
+
+        Args:
+            U: M x M complex matrix.
+
+        Returns:
+            M x M complex unitary matrix.
+        """
+        P, _, Q = np.linalg.svd(U)
+        return P @ Q
