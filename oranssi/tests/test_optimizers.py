@@ -8,14 +8,6 @@ from test_fixtures import circuit_1, circuit_2, circuit_1_bad_return_types
 
 ### Test LieLayer ###
 
-def test_assert_observables_LocalLieLayer(circuit_1):
-    circuit, device, param_shape = circuit_1
-    observables = [qml.PauliX(1), qml.Identity(0)]
-    circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
-
-    with pytest.raises(AssertionError, match='Only Pauli Observables are supported'):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires))
-
 
 def test_assert_circuit_LocalLieLayer(circuit_1):
     circuit, device, param_shape = circuit_1
@@ -83,14 +75,6 @@ def test_assert_trotterize_LocalLieLayer(circuit_1):
 
 ### Test optimizer assertions ###
 
-def test_assert_observables_exact_lie_optimizer(circuit_1):
-    circuit, device, param_shape = circuit_1
-    observables = [qml.PauliX(1), qml.Identity(0)]
-    params = [0.1, 1.2]
-    with pytest.raises(AssertionError, match='Only Pauli Observables are supported'):
-        exact_lie_optimizer(circuit, params, observables, device, eta=0.2)
-
-
 def test_assert_nsteps_exact_lie_optimizer(circuit_1):
     circuit, device, param_shape = circuit_1
     observables = [qml.PauliX(1)]
@@ -137,14 +121,6 @@ def test_assert_circuit_exact_lie_optimizer(circuit_1_bad_return_types):
         exact_lie_optimizer(circuit, params, observables, device, eta=0.2)
 
 
-def test_assert_observables_su_2_lie_optimizer(circuit_1):
-    circuit, device, param_shape = circuit_1
-    observables = [qml.PauliX(1), qml.Identity(0)]
-    params = [0.1, 1.2]
-    with pytest.raises(AssertionError, match='Only Pauli Observables are supported'):
-        local_su_2_lie_optimizer(circuit, params, observables, device, eta=0.2)
-
-
 def test_assert_nsteps_su_2_lie_optimizer(circuit_1):
     circuit, device, param_shape = circuit_1
     observables = [qml.PauliX(1)]
@@ -189,15 +165,6 @@ def test_assert_circuit_exact_lie_optimizer(circuit_1_bad_return_types):
     params = [0.1, 1.2]
     with pytest.raises(AssertionError, match='`circuit` must return a state'):
         exact_lie_optimizer(circuit, params, observables, device, eta=0.2)
-
-
-def test_assert_observables_su_4_lie_optimizer(circuit_1):
-    circuit, device, param_shape = circuit_1
-    observables = [qml.PauliX(1), qml.Identity(0)]
-    params = [0.1, 1.2]
-    with pytest.raises(AssertionError, match='Only Pauli Observables are supported'):
-        local_su_4_lie_optimizer(circuit, params, observables, device, eta=0.2)
-
 
 def test_assert_nsteps_su_4_lie_optimizer(circuit_1):
     circuit, device, param_shape = circuit_1
