@@ -54,14 +54,14 @@ def get_full_operator(op: np.ndarray, wires: Tuple[int,...], nqubits: int) -> np
     op = op.reshape([2] * 2 * len(wires))
     einsum_indices_operator = list(range(2 * len(wires)))
     einsum_indices_final_operator = list(range(2 * len(wires), 2 * nqubits + 2 * len(wires)))
+
     for i, w in enumerate(wires):
-        einsum_indices_final_operator[w] = einsum_indices_operator[i]
+        einsum_indices_final_operator[w] = einsum_indices_operator[i+len(wires)]
     einsum_indices_operator_out = copy.copy(einsum_indices_final_operator)
     for i, w in enumerate(wires):
-        einsum_indices_operator_out[w] = einsum_indices_operator[i + len(wires)]
-
-    final_operator = np.einsum(final_operator, einsum_indices_final_operator,
-                               op, einsum_indices_operator,
+        einsum_indices_operator_out[w] = einsum_indices_operator[i]
+    final_operator = np.einsum(op, einsum_indices_operator,
+                               final_operator, einsum_indices_final_operator,
                                einsum_indices_operator_out)
     return final_operator.reshape((2 ** nqubits, 2 ** nqubits))
 
