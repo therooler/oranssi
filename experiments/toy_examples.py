@@ -192,17 +192,17 @@ def single_observable_1_qubit_parameter_shift():
     def circuit(params, **kwargs):
         # qml.Hadamard(wires=0)
         qml.RY(params[0], wires=0)
-        qml.RZ(params[1], wires=0)
+        # qml.RZ(params[1], wires=0)
         # return qml.state()
 
     observables = [qml.PauliX(0)]
-    params = [0.2,1.3]
+    params = [0.4,1.2]
     costs_parameter_shift = parameter_shift_optimizer(circuit, params, observables, dev, eta=eta)
-    params = [0.2, 1.3]
+    params = [0.4, 1.2]
     def circuit(params, **kwargs):
         # qml.Hadamard(wires=0)
         qml.RY(params[0], wires=0)
-        qml.RZ(params[1], wires=0)
+        # qml.RZ(params[1], wires=0)
         return qml.state()
 
     costs_exact = exact_lie_optimizer(circuit, params, observables, dev, eta=eta)

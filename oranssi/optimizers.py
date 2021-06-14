@@ -246,11 +246,19 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
         lie_layers.append(
             LocalLieLayer(circuit_state_from_unitary_qnode, observables, locality, nqubits,
                           **kwargs))
+
+    print("Lie Layer model - nqubits = {nqubits}")
+    print('-'*50)
+    print('|', ('{:^15}|'*3).format('name', 'stride', 'Trotterize'))
+    print('-'*50)
+    for layer in lie_layers:
+        print(layer)
+    print('-'*50)
+
     lie_layers = cycle(lie_layers)
 
     if return_state:
         states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
-    cost_exact.append(0)
     cost_exact.append(0)
     for obs in observables:
         cost_exact[0] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
@@ -310,8 +318,11 @@ def parameter_shift_optimizer(circuit, params: List, observables: List, device: 
     assert (isinstance(tol, float) & (0. <= tol <= np.inf)), \
         f'`tol` must be an float between 0 and infinity, received {tol}'
     return_state = kwargs.get('return_state', False)
-    assert (isinstance(return_state, bool) & (0. <= tol <= np.inf)), \
+    assert (isinstance(return_state, bool)), \
         f'`return_state` must be a boolean, received {return_state}'
+    return_params = kwargs.get('return_params', False)
+    assert (isinstance(return_state, bool)), \
+        f'`return_params` must be a boolean, received {return_params}'
     if return_state:
         def circuit_state(params):
             circuit(params)
@@ -326,13 +337,16 @@ def parameter_shift_optimizer(circuit, params: List, observables: List, device: 
 
     cost_exact = []
     states = []
-
+    params_per_step = []
     opt = qml.GradientDescentOptimizer(eta)
     H = qml.Hamiltonian([1.0 for _ in range(len(observables))], observables)
     cost_fn = qml.ExpvalCost(circuit, H, device)
 
     if return_state:
         states.append(circuit_state(params))
+    if return_params:
+        params_per_step.append(np.copy(params))
+
     cost_exact.append(cost_fn(params))
 
     for step in range(nsteps_optimizer):
@@ -340,12 +354,18 @@ def parameter_shift_optimizer(circuit, params: List, observables: List, device: 
         cost_exact.append(cost_fn(params))
         if return_state:
             states.append(circuit_state(params))
+        if return_params:
+            params_per_step.append(np.copy(params))
         if step > 2:
             if np.isclose(cost_exact[-1], cost_exact[-2], atol=tol):
                 print(f'Cost difference between steps < {tol}, stopping early at step {step}...')
                 break
     print(f"Final cost = {cost_exact[-1]}")
-    if return_state:
+    if (return_state & return_params):
+        return cost_exact, states, params_per_step
+    elif return_params:
+        return cost_exact, params_per_step
+    elif return_state:
         return cost_exact, states
     else:
         return cost_exact
@@ -372,11 +392,6 @@ class LocalLieLayer(object):
                 -
         """
         self.state_qnode = state_qnode
-        # assert all(isinstance(o, (qml.PauliX, qml.PauliY, qml.PauliZ)) for o in observables), \
-        #     f"Only Pauli Observables are supported, received " \
-        #     f"{[o for o in observables if not isinstance(o, (qml.PauliX, qml.PauliY, qml.PauliZ))]}"
-        # assert all(len(obs.wires) == 1 for obs in
-        #            observables), 'Only single qubit observables are implemented currently'
         self.observables = observables
 
         self.eta = kwargs.get('eta', 0.1)
@@ -481,3 +496,8 @@ class LocalLieLayer(object):
         """
         P, _, Q = np.linalg.svd(U)
         return P @ Q
+
+    def __repr__(self):
+        row_format = "{:^15}|" * 3
+        return "| "+\
+               row_format.format(f'Lie Layer SU({2**self.locality})', self.stride, self.trotterize)

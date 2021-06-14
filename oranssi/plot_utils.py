@@ -59,4 +59,30 @@ def state_to_spherical(rho):
     coeffs = [np.trace(rho @ paulis[i]).real for i in range(3)]
     theta = np.arccos(coeffs[2])
     phi = np.arctan2(coeffs[1], coeffs[0])
+    phi %= (2 * np.pi)
+    theta %= (2 * np.pi)
+    if np.isclose(phi, 2*np.pi, atol=1e-3):
+        phi = 0.
+    if np.isclose(theta, 2*np.pi, atol=1e-3):
+        theta = 0
     return phi, theta
+
+
+def change_label_fontsize(ax: plt.Axes, newsize: int):
+    """
+    Change all labels on the axes to the new size.
+
+    Args:
+        *ax (plt.Axes)*:
+            Pyplot axes object.
+
+        *newsize (int)*:
+            New label size.
+
+    Returns (inplace):
+        None
+
+    """
+    for item in ([ax.xaxis.label, ax.yaxis.label] +
+                 ax.get_xticklabels() + ax.get_yticklabels()):
+        item.set_fontsize(newsize)
