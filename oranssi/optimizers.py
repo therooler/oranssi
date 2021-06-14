@@ -236,8 +236,10 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
 
     cost_exact = []
     states = []
+
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
     circuit_observable_from_unitary_qnode = qml.QNode(circuit_observable_from_unitary, device)
+
     lie_layers = []
     for locality, stride in layer_pattern:
         kwargs['stride'] = stride
@@ -245,6 +247,10 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
             LocalLieLayer(circuit_state_from_unitary_qnode, observables, locality, nqubits,
                           **kwargs))
     lie_layers = cycle(lie_layers)
+
+    if return_state:
+        states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
+    cost_exact.append(0)
     cost_exact.append(0)
     for obs in observables:
         cost_exact[0] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
