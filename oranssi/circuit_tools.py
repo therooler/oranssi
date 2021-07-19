@@ -50,6 +50,8 @@ def get_full_operator(op: np.ndarray, wires: Tuple[int,...], nqubits: int) -> np
         Numpy array of size 2^n x 2^n corresponding to the full unitary.
     """
     assert max(wires) < nqubits, f'Operator is acting on qubit {max(wires)}, but nqubits is {nqubits}'
+    opsize = int(np.log2(op.shape[0]))
+    assert opsize == len(wires),f'Operator is shape {op.shape} acting on {opsize} qubits, but wires = {wires}'
     final_operator = np.eye(2 ** nqubits, 2 ** nqubits, dtype=complex).reshape([2] * 2 * nqubits)
     op = op.reshape([2] * 2 * len(wires))
     einsum_indices_operator = list(range(2 * len(wires)))
