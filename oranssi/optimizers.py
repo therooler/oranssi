@@ -157,7 +157,7 @@ def local_su_4_lie_optimizer(circuit, params: List, observables: List, device: q
     Returns:
         List of floats corresponding to the cost.
     """
-    
+
     return local_custom_su_lie_optimizer(circuit, params, observables, device,
                                          layer_pattern=[(2, 0)], **kwargs)
 
@@ -205,11 +205,11 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
     assert all(i[0] in [1, 2] for i in
                layer_pattern), 'The tuples in `layer_patern` must have as first entry integers ' \
                                'in [1, 2] that indicate the whether we apply a SU(2) or SU(4) ' \
-                               f'layer, received {list(i[0] for i in layer_pattern)}'
+                               f'layer, received {layer_pattern}'
     assert all(i[1] in [0, 1] for i in
                layer_pattern), 'The tuples in `layer_patern` must have as first entry integers ' \
                                'in [0, ] that indicate the stride of the layer, ' \
-                               f'received {list(i[1] for i in layer_pattern)}'
+                               f'received {layer_pattern}'
 
     nsteps_optimizer = kwargs.get('nsteps', 40)
     assert (isinstance(nsteps_optimizer, int) & (1 <= nsteps_optimizer <= np.inf)), \
@@ -221,9 +221,20 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
     assert (isinstance(tol, float) & (0. <= tol <= np.inf)), \
         f'`tol` must be an float between 0 and infinity, received {tol}'
     return_state = kwargs.get('return_state', False)
-    assert (isinstance(return_state, bool) & (0. <= tol <= np.inf)), \
+    assert (isinstance(return_state, bool)), \
         f'`return_state` must be a boolean, received {return_state}'
+    return_omegas = kwargs.get('return_omegas', False)
+    assert (isinstance(return_omegas, bool)), \
+        f'`return_state` must be a boolean, received {return_omegas}'
+    directions = kwargs.pop('directions', None)
 
+    if directions is not None:
+        assert isinstance(directions,
+                          Iterable), f'`directions` must be an iterable, received {directions}'
+        assert all((all(isinstance(ds,str) for ds in d))for d in directions), \
+            f'`directions` must be an iterable of iterables of strings, received {directions}'
+        assert len(directions) == len(layer_pattern), '`directions` must have equal length to ' \
+                                                      '`layer_pattern`'
     print(f"-------------------------------------------------------------------")
     print(f"- Riemannian optimization on custom SU(p) with matrix exponential -")
     print(f"-------------------------------------------------------------------")
@@ -236,24 +247,32 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
 
     cost_exact = []
     states = []
+    omegas = []
 
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
     circuit_observable_from_unitary_qnode = qml.QNode(circuit_observable_from_unitary, device)
 
     lie_layers = []
-    for locality, stride in layer_pattern:
+    for i, locstr in enumerate(layer_pattern):
+        locality, stride = locstr
         kwargs['stride'] = stride
-        lie_layers.append(
-            LocalLieLayer(circuit_state_from_unitary_qnode, observables, locality, nqubits,
-                          **kwargs))
+        if directions is not None:
+            lie_layers.append(
+                LocalLieLayer(circuit_state_from_unitary_qnode, observables, locality, nqubits,
+                              directions=directions[i],**kwargs))
+        else:
 
-    print("Lie Layer model - nqubits = {nqubits}")
-    print('-'*50)
-    print('|', ('{:^15}|'*3).format('name', 'stride', 'Trotterize'))
-    print('-'*50)
+            lie_layers.append(
+                LocalLieLayer(circuit_state_from_unitary_qnode, observables, locality, nqubits,
+                              **kwargs))
+
+    print(f"Lie Layer model - nqubits = {nqubits}")
+    print('-' * 50)
+    print('|', ('{:^15}|' * 3).format('name', 'stride', 'Trotterize'))
+    print('-' * 50)
     for layer in lie_layers:
         print(layer)
-    print('-'*50)
+    print('-' * 50)
 
     lie_layers = cycle(lie_layers)
 
@@ -265,9 +284,12 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
                                                                observable=obs)
     for step in range(nsteps_optimizer):
         cost_exact.append(0)
-        circuit_unitary = next(lie_layers)(circuit_unitary)
+        layer = next(lie_layers)
+        circuit_unitary = layer(circuit_unitary)
         if return_state:
             states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
+        if return_omegas:
+            omegas.append(layer.get_lie_algebra_directions(circuit_unitary))
         for o in observables:
             cost_exact[step + 1] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
                                                                           observable=o)
@@ -278,6 +300,10 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
     print(f"Final cost = {cost_exact[-1]}")
     if return_state:
         return cost_exact, states
+    if return_omegas:
+        return cost_exact, np.array(omegas)
+    if (return_state & return_omegas):
+        return cost_exact, states, np.array(omegas)
     else:
         return cost_exact
 
@@ -341,7 +367,6 @@ def parameter_shift_optimizer(circuit, params: List, observables: List, device: 
     opt = qml.GradientDescentOptimizer(eta)
     H = qml.Hamiltonian([1.0 for _ in range(len(observables))], observables)
     cost_fn = qml.ExpvalCost(circuit, H, device)
-
     if return_state:
         states.append(circuit_state(params))
     if return_params:
@@ -392,23 +417,40 @@ class LocalLieLayer(object):
                 -
         """
         self.state_qnode = state_qnode
-        self.observables = observables
-
         self.eta = kwargs.get('eta', 0.1)
         assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
             f'`eta` must be an float between 0 and 1, received {self.eta}'
         assert locality in [1, 2], f'Only SU(2) and SU(4) local are supported with `locality` in ' \
                                    f'[1,2] respectively, received `locality` = {locality}'
         self.locality = locality
+
         if locality == 2:
             assert (nqubits / 2 == nqubits // 2), f"`nqubits` must be even, received {nqubits}"
-            self.paulis = get_su_4_operators()
+            self.paulis, self.directions = get_su_4_operators(return_names=True)
+
             self.stride = kwargs.get('stride', 0)
             assert self.stride in [0, 1], f'`stride` must be in [0,1], received {self.stride}'
         else:
-            self.paulis = get_su_2_operators()
+            self.paulis, self.directions = get_su_2_operators(return_names=True)
             self.stride = 0
+        directions = kwargs.get('directions', None)
+        if directions is not None:
+            assert all(d in self.directions for d in directions), \
+                f'Supplied Lie algebra directions are invalid, ' \
+                f'expected {self.directions}, received {directions}'
+            new_directions = []
+            new_paulis = []
+            for pauli, d in zip(self.paulis, self.directions):
+                if d in directions:
+                    new_directions.append(d)
+                    new_paulis.append(pauli)
+            self.paulis = new_paulis
+            self.directions = new_directions
+
         self.nqubits = nqubits
+        self.observables = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
+                            observables]
+
         self.unitary_error_check = kwargs.get('unitary_error_check', False)
         assert isinstance(self.unitary_error_check,
                           bool), f'`unitary_error_check` must be a boolean, ' \
@@ -418,7 +460,6 @@ class LocalLieLayer(object):
                                                   f'received {type(self.trotterize)}'
         # depending on the locality, create the full pauli matrices required to calculate the commutators
         self.full_paulis = []
-
         if self.locality == 1:
             for i in range(self.nqubits):
                 self.full_paulis.append(
@@ -440,14 +481,12 @@ class LocalLieLayer(object):
         phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
 
         for obs in self.observables:
-
-            full_obs = get_full_operator(obs.matrix, obs.wires, self.nqubits)
             for full_paulis in self.full_paulis:
                 self.op.fill(0)
                 omegas = []
                 if self.trotterize:
                     for j, pauli in enumerate(full_paulis):
-                        omega = phi.conj().T @ (pauli @ full_obs - full_obs @ pauli) @ phi
+                        omega = phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi
                         self.op = omega * pauli
                         U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
                         if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
@@ -456,7 +495,7 @@ class LocalLieLayer(object):
                         self.op.fill(0)
                 else:
                     for j, pauli in enumerate(full_paulis):
-                        omegas.append(phi.conj().T @ (pauli @ full_obs - full_obs @ pauli) @ phi)
+                        omegas.append(phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi)
                     self.op += sum(omegas[i] * pauli for i, pauli in enumerate(full_paulis))
                     U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
                     if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
@@ -499,5 +538,20 @@ class LocalLieLayer(object):
 
     def __repr__(self):
         row_format = "{:^15}|" * 3
-        return "| "+\
-               row_format.format(f'Lie Layer SU({2**self.locality})', self.stride, self.trotterize)
+        return "| " + \
+               row_format.format(f'Lie Layer SU({2 ** self.locality})', self.stride,
+                                 self.trotterize) + " directions -> " + ", ".join(self.directions)
+
+    def get_lie_algebra_directions(self, circuit_unitary):
+
+        phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
+        omegas = np.zeros((len(self.observables), len(self.full_paulis), len(self.full_paulis[0])))
+        for o, obs in enumerate(self.observables):
+            for p, full_paulis in enumerate(self.full_paulis):
+                self.op.fill(0)
+                for j, pauli in enumerate(full_paulis):
+                    omegas[o, p, j] = (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi)[0, 0].imag
+        return omegas
+
+    def get_lie_algebra_directions_strings(self):
+        return self.directions
