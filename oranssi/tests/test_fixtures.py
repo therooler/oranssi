@@ -44,6 +44,24 @@ def circuit_2():
 
 
 @pytest.fixture
+def circuit_3():
+    device = qml.device('default.qubit', wires=4)
+
+    def circuit(params, **kwargs):
+        for n in range(4):
+            qml.Hadamard(wires=n)
+            qml.RZ(params[0], wires=n)
+        for n in range(3):
+            qml.CNOT(wires=[n, n + 1])
+        qml.CNOT(wires=[3, 0])
+        for n in range(4):
+            qml.RY(params[1], wires=n)
+        return qml.state()
+
+    param_shape = (2,)
+    return circuit, device, param_shape
+
+@pytest.fixture
 def circuit_1_bad_return_types(request):
     if request.param == 'float':
         def circuit():
@@ -81,3 +99,36 @@ def circuit_1_bad_return_types(request):
             return circuit, device, param_shape
 
         return circuit()
+
+
+@pytest.fixture()
+def circuit_4_state_obs(request):
+    nqubits = request.param
+    device = qml.device('default.qubit', wires=nqubits)
+    param_shape = (2,)
+
+
+    def circuit(params, **kwargs):
+        observable = kwargs.get('observable')
+        for n in range(nqubits):
+            qml.Hadamard(wires=n)
+            qml.RZ(params[0], wires=n)
+        for n in range(nqubits - 1):
+            qml.CNOT(wires=[n, n + 1])
+        qml.CNOT(wires=[nqubits - 1, 0])
+        for n in range(nqubits):
+            qml.RY(params[1], wires=n)
+        return qml.expval(observable)
+
+    def circuit_state(params, **kwargs):
+        for n in range(nqubits):
+            qml.Hadamard(wires=n)
+            qml.RZ(params[0], wires=n)
+        for n in range(nqubits - 1):
+            qml.CNOT(wires=[n, n + 1])
+        qml.CNOT(wires=[nqubits - 1, 0])
+        for n in range(nqubits):
+            qml.RY(params[1], wires=n)
+        return qml.state()
+
+    return circuit, circuit_state, device, param_shape
