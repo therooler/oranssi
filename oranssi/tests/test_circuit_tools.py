@@ -116,4 +116,4 @@ def test_observable_calculation_loc_2(circuit_4_state_obs):
             o = get_obs(params, observable=obs)
             state = get_state(params)
             o_np = state.conj().T @ (get_full_operator(paulis[i], comb, nqubits)) @ state
-            print(np.isclose(o, o_np))
+            assert np.isclose(o, o_np)
