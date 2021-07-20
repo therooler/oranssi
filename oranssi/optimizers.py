@@ -11,6 +11,94 @@ from oranssi.circuit_tools import get_full_operator, get_ops_from_qnode, circuit
 from oranssi.utils import get_su_2_operators, get_su_4_operators
 
 
+def parameter_shift_optimizer(circuit, params: List, observables: List, device: qml.Device,
+                              **kwargs):
+    """
+    Riemannian gradient flow on the local unitary group. Implements U_{k+1} = exp(-ia [rho, O]) U_k by projecting
+    the cost function onto SU(p)_loc_4 = (X) SU(4) by way of the matrix exponential. Not hardware
+    friendly.
+
+    Args:
+        circuit: Function with signature (params, **kwargs) that returns a PennyLane state or observable.
+        params: List of parameters for the circuit. If no parameters, should be empty list.
+        observables: List of PennyLane observables.
+        device: PennyLane device.
+        layer_patern: Pattern of the gates that should be applied
+        **kwargs: Possible optimizer arguments:
+            - nsteps: Maximum steps for the optimizer to take.
+            - eta: Learning rate.
+            - tol: Tolerance on the cost for early stopping.
+
+    Returns:
+        List of floats corresponding to the cost.
+    """
+    if hasattr(circuit(params), 'return_type'):
+        raise AttributeError('`circuit` must not return anything')
+
+    nqubits = len(device.wires)
+
+    nsteps_optimizer = kwargs.get('nsteps', 40)
+    assert (isinstance(nsteps_optimizer, int) & (1 <= nsteps_optimizer <= np.inf)), \
+        f'`nsteps` must be an integer between 0 and infinity, received {nsteps_optimizer}'
+    eta = kwargs.get('eta', 0.1)
+    assert (isinstance(eta, float) & (0. <= eta <= 1.)), \
+        f'`eta` must be an float between 0 and 1, received {eta}'
+    tol = kwargs.get('tol', 1e-3)
+    assert (isinstance(tol, float) & (0. <= tol <= np.inf)), \
+        f'`tol` must be an float between 0 and infinity, received {tol}'
+    return_state = kwargs.get('return_state', False)
+    assert (isinstance(return_state, bool)), \
+        f'`return_state` must be a boolean, received {return_state}'
+    return_params = kwargs.get('return_params', False)
+    assert (isinstance(return_state, bool)), \
+        f'`return_params` must be a boolean, received {return_params}'
+    if return_state:
+        def circuit_state(params):
+            circuit(params)
+            return qml.state()
+
+        circuit_state = qml.QNode(circuit_state, device)
+    print(f"--------------------------------")
+    print(f"- Parameter shift optimization -")
+    print(f"--------------------------------")
+    print(f"nqubits = {nqubits} \nlearning rate = {eta} \nconvergence tolerance {tol}")
+    print(f"--------------------------------")
+
+    cost_exact = []
+    states = []
+    params_per_step = []
+    opt = qml.GradientDescentOptimizer(eta)
+    H = qml.Hamiltonian([1.0 for _ in range(len(observables))], observables)
+    cost_fn = qml.ExpvalCost(circuit, H, device)
+    if return_state:
+        states.append(circuit_state(params))
+    if return_params:
+        params_per_step.append(np.copy(params))
+
+    cost_exact.append(cost_fn(params))
+
+    for step in range(nsteps_optimizer):
+        params, cost = opt.step_and_cost(cost_fn, params)
+        cost_exact.append(cost_fn(params))
+        if return_state:
+            states.append(circuit_state(params))
+        if return_params:
+            params_per_step.append(np.copy(params))
+        if step > 2:
+            if np.isclose(cost_exact[-1], cost_exact[-2], atol=tol):
+                print(f'Cost difference between steps < {tol}, stopping early at step {step}...')
+                break
+    print(f"Final cost = {cost_exact[-1]}")
+    if (return_state & return_params):
+        return cost_exact, states, params_per_step
+    elif return_params:
+        return cost_exact, params_per_step
+    elif return_state:
+        return cost_exact, states
+    else:
+        return cost_exact
+
+
 def exact_lie_optimizer(circuit, params: List, observables: List, device: qml.Device, **kwargs) -> \
         List[float]:
     """
@@ -227,14 +315,17 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
     assert (isinstance(return_omegas, bool)), \
         f'`return_state` must be a boolean, received {return_omegas}'
     directions = kwargs.pop('directions', None)
-
     if directions is not None:
         assert isinstance(directions,
                           Iterable), f'`directions` must be an iterable, received {directions}'
-        assert all((all(isinstance(ds,str) for ds in d))for d in directions), \
+        assert all((all(isinstance(ds, str) for ds in d)) for d in directions), \
             f'`directions` must be an iterable of iterables of strings, received {directions}'
         assert len(directions) == len(layer_pattern), '`directions` must have equal length to ' \
                                                       '`layer_pattern`'
+    adaptive = kwargs.pop('adaptive', False)
+    assert (isinstance(adaptive, bool)), \
+        f'`adaptive` must be a boolean, received {adaptive}'
+
     print(f"-------------------------------------------------------------------")
     print(f"- Riemannian optimization on custom SU(p) with matrix exponential -")
     print(f"-------------------------------------------------------------------")
@@ -259,7 +350,7 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
         if directions is not None:
             lie_layers.append(
                 LocalLieLayer(circuit_state_from_unitary_qnode, observables, locality, nqubits,
-                              directions=directions[i],**kwargs))
+                              directions=directions[i], **kwargs))
         else:
 
             lie_layers.append(
@@ -285,14 +376,39 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
     for step in range(nsteps_optimizer):
         cost_exact.append(0)
         layer = next(lie_layers)
-        circuit_unitary = layer(circuit_unitary)
+        if adaptive:
+            print("Adaptive step")
+            adaptive_costs = []
+            circuit_unitary = layer(circuit_unitary)
+            adaptive_costs.append(0)
+            for o in observables:
+                adaptive_costs[0] += circuit_observable_from_unitary_qnode(
+                    unitary=circuit_unitary,
+                    observable=o)
+            adaptive_step = 1
+            while True:
+                circuit_unitary = layer(circuit_unitary)
+                adaptive_costs.append(0)
+                for o in observables:
+                    adaptive_costs[adaptive_step] += circuit_observable_from_unitary_qnode(
+                        unitary=circuit_unitary,
+                        observable=o)
+                print(adaptive_costs[-1])
+                adaptive_step += 1
+                if np.isclose(adaptive_costs[-1], adaptive_costs[-2],atol=tol):
+                    break
+            cost_exact[step + 1] = np.copy(adaptive_costs[-1])
+        else:
+            circuit_unitary = layer(circuit_unitary)
+            for o in observables:
+                cost_exact[step + 1] += circuit_observable_from_unitary_qnode(
+                    unitary=circuit_unitary,
+                    observable=o)
         if return_state:
             states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
         if return_omegas:
             omegas.append(layer.get_lie_algebra_directions(circuit_unitary))
-        for o in observables:
-            cost_exact[step + 1] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
-                                                                          observable=o)
+
         if step > 2:
             if np.isclose(cost_exact[-1], cost_exact[-2], atol=tol):
                 print(f'Cost difference between steps < {tol}, stopping early at step {step}...')
@@ -304,94 +420,6 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
         return cost_exact, np.array(omegas)
     if (return_state & return_omegas):
         return cost_exact, states, np.array(omegas)
-    else:
-        return cost_exact
-
-
-def parameter_shift_optimizer(circuit, params: List, observables: List, device: qml.Device,
-                              **kwargs):
-    """
-    Riemannian gradient flow on the local unitary group. Implements U_{k+1} = exp(-ia [rho, O]) U_k by projecting
-    the cost function onto SU(p)_loc_4 = (X) SU(4) by way of the matrix exponential. Not hardware
-    friendly.
-
-    Args:
-        circuit: Function with signature (params, **kwargs) that returns a PennyLane state or observable.
-        params: List of parameters for the circuit. If no parameters, should be empty list.
-        observables: List of PennyLane observables.
-        device: PennyLane device.
-        layer_patern: Pattern of the gates that should be applied
-        **kwargs: Possible optimizer arguments:
-            - nsteps: Maximum steps for the optimizer to take.
-            - eta: Learning rate.
-            - tol: Tolerance on the cost for early stopping.
-
-    Returns:
-        List of floats corresponding to the cost.
-    """
-    if hasattr(circuit(params), 'return_type'):
-        raise AttributeError('`circuit` must not return anything')
-
-    nqubits = len(device.wires)
-
-    nsteps_optimizer = kwargs.get('nsteps', 40)
-    assert (isinstance(nsteps_optimizer, int) & (1 <= nsteps_optimizer <= np.inf)), \
-        f'`nsteps` must be an integer between 0 and infinity, received {nsteps_optimizer}'
-    eta = kwargs.get('eta', 0.1)
-    assert (isinstance(eta, float) & (0. <= eta <= 1.)), \
-        f'`eta` must be an float between 0 and 1, received {eta}'
-    tol = kwargs.get('tol', 1e-3)
-    assert (isinstance(tol, float) & (0. <= tol <= np.inf)), \
-        f'`tol` must be an float between 0 and infinity, received {tol}'
-    return_state = kwargs.get('return_state', False)
-    assert (isinstance(return_state, bool)), \
-        f'`return_state` must be a boolean, received {return_state}'
-    return_params = kwargs.get('return_params', False)
-    assert (isinstance(return_state, bool)), \
-        f'`return_params` must be a boolean, received {return_params}'
-    if return_state:
-        def circuit_state(params):
-            circuit(params)
-            return qml.state()
-
-        circuit_state = qml.QNode(circuit_state, device)
-    print(f"--------------------------------")
-    print(f"- Parameter shift optimization -")
-    print(f"--------------------------------")
-    print(f"nqubits = {nqubits} \nlearning rate = {eta} \nconvergence tolerance {tol}")
-    print(f"--------------------------------")
-
-    cost_exact = []
-    states = []
-    params_per_step = []
-    opt = qml.GradientDescentOptimizer(eta)
-    H = qml.Hamiltonian([1.0 for _ in range(len(observables))], observables)
-    cost_fn = qml.ExpvalCost(circuit, H, device)
-    if return_state:
-        states.append(circuit_state(params))
-    if return_params:
-        params_per_step.append(np.copy(params))
-
-    cost_exact.append(cost_fn(params))
-
-    for step in range(nsteps_optimizer):
-        params, cost = opt.step_and_cost(cost_fn, params)
-        cost_exact.append(cost_fn(params))
-        if return_state:
-            states.append(circuit_state(params))
-        if return_params:
-            params_per_step.append(np.copy(params))
-        if step > 2:
-            if np.isclose(cost_exact[-1], cost_exact[-2], atol=tol):
-                print(f'Cost difference between steps < {tol}, stopping early at step {step}...')
-                break
-    print(f"Final cost = {cost_exact[-1]}")
-    if (return_state & return_params):
-        return cost_exact, states, params_per_step
-    elif return_params:
-        return cost_exact, params_per_step
-    elif return_state:
-        return cost_exact, states
     else:
         return cost_exact
 
@@ -450,6 +478,7 @@ class LocalLieLayer(object):
         self.nqubits = nqubits
         self.observables = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
                             observables]
+        print(np.linalg.eigvalsh(np.sum(self.observables, axis=0)))
 
         self.unitary_error_check = kwargs.get('unitary_error_check', False)
         assert isinstance(self.unitary_error_check,
@@ -480,12 +509,13 @@ class LocalLieLayer(object):
     def __call__(self, circuit_unitary, *args, **kwargs):
         phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
 
-        for obs in self.observables:
+        for oi, obs in enumerate(self.observables):
             for full_paulis in self.full_paulis:
                 self.op.fill(0)
                 omegas = []
                 if self.trotterize:
                     for j, pauli in enumerate(full_paulis):
+                        # phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
                         omega = phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi
                         self.op = omega * pauli
                         U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
@@ -494,10 +524,11 @@ class LocalLieLayer(object):
                         circuit_unitary = U_riemann_approx @ circuit_unitary
                         self.op.fill(0)
                 else:
+                    # phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
                     for j, pauli in enumerate(full_paulis):
                         omegas.append(phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi)
-                    self.op += sum(omegas[i] * pauli for i, pauli in enumerate(full_paulis))
-                    U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * self.op)
+                        self.op += omegas[-1] * pauli
+                    U_riemann_approx = ssla.expm( -self.eta / 2 ** self.nqubits * self.op)
                     if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
                         U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
                     circuit_unitary = U_riemann_approx @ circuit_unitary
@@ -555,3 +586,6 @@ class LocalLieLayer(object):
 
     def get_lie_algebra_directions_strings(self):
         return self.directions
+
+    def set_eta(self, eta):
+        self.eta = np.copy(eta)
