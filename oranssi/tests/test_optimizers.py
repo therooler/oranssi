@@ -2,7 +2,8 @@ import pytest
 import pennylane as qml
 import numpy as np
 from oranssi.optimizers import exact_lie_optimizer, local_su_2_lie_optimizer, local_su_4_lie_optimizer, \
-    circuit_state_from_unitary, LocalLieLayer
+    circuit_state_from_unitary
+from oranssi.opt_tools import LocalLieAlgebraLayer
 from test_fixtures import circuit_1, circuit_2, circuit_1_bad_return_types
 
 
@@ -15,7 +16,7 @@ def test_assert_circuit_LocalLieLayer(circuit_1):
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
 
     with pytest.raises(AssertionError, match='Only SU'):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 3, len(device.wires))
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 3, len(device.wires))
 
 
 def test_assert_nqubits_LocalLieLayer(circuit_2):
@@ -24,7 +25,7 @@ def test_assert_nqubits_LocalLieLayer(circuit_2):
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
 
     with pytest.raises(AssertionError, match='`nqubits` must be even, received'):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires))
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires))
 
 
 def test_assert_eta_LocalLieLayer(circuit_1):
@@ -33,12 +34,12 @@ def test_assert_eta_LocalLieLayer(circuit_1):
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
 
     with pytest.raises(AssertionError, match='`eta` must be an float between 0 and 1, '):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=-1)
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=-1)
     with pytest.raises(AssertionError, match='`eta` must be an float between 0 and 1, '):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=10.)
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=10.)
     with pytest.raises(AssertionError, match='`eta` must be an float between 0 and 1, '):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=10)
-    LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=0.1)
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=10)
+    LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), eta=0.1)
 
 
 def test_assert_stride_LocalLieLayer(circuit_1):
@@ -47,11 +48,11 @@ def test_assert_stride_LocalLieLayer(circuit_1):
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
 
     with pytest.raises(AssertionError, match='`stride` must be'):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=2)
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=2)
     with pytest.raises(AssertionError, match='`stride` must be'):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=-1)
-    LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=0)
-    LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=1)
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=-1)
+    LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=0)
+    LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), stride=1)
 
 
 def test_assert_unitary_error_check_LocalLieLayer(circuit_1):
@@ -60,8 +61,8 @@ def test_assert_unitary_error_check_LocalLieLayer(circuit_1):
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
 
     with pytest.raises(AssertionError, match='`unitary_error_check` must be a boolean, '):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), unitary_error_check='check')
-    LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), unitary_error_check=True)
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), unitary_error_check='check')
+    LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), unitary_error_check=True)
 
 
 def test_assert_trotterize_LocalLieLayer(circuit_1):
@@ -70,8 +71,8 @@ def test_assert_trotterize_LocalLieLayer(circuit_1):
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
 
     with pytest.raises(AssertionError, match='`trotterize` must be a boolean, '):
-        LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), trotterize='check')
-    LocalLieLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), trotterize=True)
+        LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), trotterize='check')
+    LocalLieAlgebraLayer(circuit_state_from_unitary_qnode, observables, 2, len(device.wires), trotterize=True)
 
 ### Test optimizer assertions ###
 

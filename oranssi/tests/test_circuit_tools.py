@@ -87,6 +87,7 @@ def test_observable_calculation_loc_1(circuit_4_state_obs):
             o_np = state.conj().T @ (get_full_operator(paulis[i], (n,), nqubits)) @ state
             assert np.isclose(o, o_np)
 
+
 @pytest.mark.parametrize('circuit_4_state_obs', [2, 3, 4], indirect=True)
 def test_observable_calculation_loc_2(circuit_4_state_obs):
     circuit, circuit_state, device, param_shape = circuit_4_state_obs
