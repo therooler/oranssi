@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import pennylane as qml
 from oranssi.optimizers import exact_lie_optimizer, local_su_2_lie_optimizer, \
     local_su_4_lie_optimizer, local_custom_su_lie_optimizer, parameter_shift_optimizer
-
+import numpy as np
 
 def su_exact_optimizer(nqubits):
     dev = qml.device('default.qubit', wires=nqubits)
@@ -74,7 +74,7 @@ def su_2_local_optimizer(nqubits):
 
 def su_4_local_optimizer(nqubits):
     dev = qml.device('default.qubit', wires=nqubits)
-    eta = 0.5
+    eta = 0.01
 
     def circuit(params, **kwargs):
         for n in range(nqubits):
@@ -117,24 +117,24 @@ def su_4_2_local_optimizer(nqubits):
         for n in range(nqubits):
             qml.Hadamard(wires=n)
             qml.RZ(params[0], wires=n)
-        for n in range(nqubits - 1):
-            qml.CNOT(wires=[n, n + 1])
-        qml.CNOT(wires=[nqubits - 1, 0])
+        # for n in range(nqubits - 1):
+        #     qml.CNOT(wires=[n, n + 1])
+        # qml.CNOT(wires=[nqubits - 1, 0])
         for n in range(nqubits):
             qml.RY(params[1], wires=n)
         return qml.state()
-
-    params = [0.3, 0.6,0.3, 0.2]
+    # np.random.seed(324234)
+    params = np.random.randn(2)
 
     observables = [qml.PauliX(i) for i in range(nqubits)] + \
                   [qml.PauliZ(i) @ qml.PauliZ(i + 1) for i in range(nqubits - 1)] + \
                   [qml.PauliZ(nqubits - 1) @ qml.PauliZ(0)]
-
+    directions = [[ 'XX', 'YY','YX','XY'], 'Z']
     costs_exact = local_custom_su_lie_optimizer(circuit, params, observables, dev, eta=eta,
-                                                layer_pattern=[(1, 0), (2, 0), (2, 1)], nsteps=100,
-                                                tol=1e-3, trotterize=True)
-    # costs_exact = parameter_shift_optimizer(circuit, params, observables, dev, eta=eta, nsteps=100,
-    #                                         tol=1e-3)
+                                                layer_pattern=[(2, 0), (1,0)], nsteps=100,
+                                                tol=1e-3, trotterize=False, adaptive=False, directions=directions)
+    # costs_exact = exact_lie_optimizer(circuit, params, observables, dev, eta=eta, nsteps=100,
+    #                                         tol=1e-3, adaptive=True)
     cmap = plt.cm.get_cmap('Set1')
 
     plt.plot(costs_exact, label=r'Lie $SU(2^n)$', color=cmap(0.2))
