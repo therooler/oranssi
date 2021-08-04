@@ -339,7 +339,7 @@ class StochasticLieAlgebraLayer(LieLayer):
     def __init__(self, state_qnode, observables: List, nqubits: int,
                  **kwargs):
         """
-        Class that applies a Riemannian optimization step on pre-specified Lie algebra.
+        Class that applies a Riemannian optimization step on pre-specified Lie algebra Stochastically.
         Uses the matrix exponential to calculate the exact operator of the commutator.
         Trotterization applies only on the level of observables, NOT on the level of individual SU(p) terms.
 
@@ -386,7 +386,7 @@ class StochasticLieAlgebraLayer(LieLayer):
         perturb = kwargs.get('perturb', False)
 
         if new_direction:
-            direction, qubits = self.lastate.get_direction_and_qubits()
+            direction, qubits = self.lastate.get_random_direction_and_qubits()
             self.current_direction = direction
             self.current_qubits = qubits
 
@@ -416,26 +416,13 @@ class StochasticLieAlgebraLayer(LieLayer):
 
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
-
-    # def reset_directions(self):
-    #     # self.directions = get_su_2_operators(return_names=True)[1] +\
-    #     #                   get_su_4_operators(return_names=True)[1]
-    #     self.directions = get_su_4_operators(return_names=True)[1]
-    #     self.directions_left = copy.copy(self.directions)
-    #     print('reset directions')
-    #
-    # def reset_qubits(self):
-    #     # self.combinations_1 = list((q,) for q in range(nqubits))
-    #     # self.combinations_2 = list(it.combinations(range(self.nqubits), r=2))
-    #     self.qubits_left = np.zeros(self.nqubits, dtype=int)
-    #     print('reset qubits')
 
 
 class SquaredLieAlgebraLayer(LieLayer):
-    def __init__(self, state_qnode, observables: List, nqubits: int,
+    def __init__(self, state_qnode, obs_qnode, observables: List, nqubits: int,
                  **kwargs):
         """
-        Class that applies a Riemannian optimization step on pre-specified Lie algebra.
+        Class that applies a Riemannian optimization step by searching over the optimal direction
         Uses the matrix exponential to calculate the exact operator of the commutator.
         Trotterization applies only on the level of observables, NOT on the level of individual SU(p) terms.
 
@@ -453,6 +440,7 @@ class SquaredLieAlgebraLayer(LieLayer):
         super().__init__(state_qnode, observables, nqubits)
 
         self.state_qnode = state_qnode
+        self.obs_qnode = obs_qnode
         self.eta = kwargs.get('eta', 0.1)
         assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
             f'`eta` must be an float between 0 and 1, received {self.eta}'
@@ -461,11 +449,9 @@ class SquaredLieAlgebraLayer(LieLayer):
             f'`eta` must be an float between 0 and 1, received {self.eta}'
         self.nqubits = nqubits
         self.lastate = AlgebraSU4(nqubits, add_su2=True)
-
-        self.observables = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
-                            observables]
-        # print(np.linalg.eigvalsh(np.sum(self.observables, axis=0)))
-
+        self.observables = observables
+        self.observables_full = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
+                                 observables]
         self.unitary_error_check = kwargs.get('unitary_error_check', False)
         assert isinstance(self.unitary_error_check,
                           bool), f'`unitary_error_check` must be a boolean, ' \
@@ -474,30 +460,73 @@ class SquaredLieAlgebraLayer(LieLayer):
         assert isinstance(self.trotterize, bool), f'`trotterize` must be a boolean, ' \
                                                   f'received {type(self.trotterize)}'
         # initialize
-        self.current_direction, self.current_qubits = None, None
+        self.current_pauli, self.previous_pauli = None, ('Null', 0)
+        self.lastate.get_all_direction_and_qubits()
 
     def __call__(self, circuit_unitary, *args, **kwargs):
         phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
-        new_direction = kwargs.get('new_direction', False)
-        perturb = kwargs.get('perturb', False)
+        # new_direction = kwargs.get('new_direction', False)
+        escape = kwargs.get('escape', False)
 
-        if new_direction:
-            direction, qubits = self.lastate.get_direction_and_qubits()
-            self.current_direction = direction
-            self.current_qubits = qubits
+        # if new_direction:
+        omegas = {}
+        for k, pauli in self.lastate.full_paulis.items():
+            if k != self.previous_pauli:
+                omegas[k] = 0
+                for oi, obs in enumerate(self.observables_full):
+                    omegas[k] += float(
+                        (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+                omegas[k] = abs(omegas[k])
+        k_max = max(omegas, key=omegas.get)
+        self.current_pauli = k_max
+        self.previous_pauli = k_max
 
-        for oi, obs in enumerate(self.observables):
-            pauli = self.lastate.full_paulis[(self.current_direction, *self.current_qubits)]
-            omega = phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi
-            if perturb:
-                omega = 1j * np.sign(omega.real)
+        if escape:
+            escape_costs = {}
+            for k, pauli in self.lastate.full_paulis.items():
+                U_riemann_approx = ssla.expm(-1j * self.eta / 2 ** self.nqubits * pauli)
+                circuit_unitary_temp = U_riemann_approx @ circuit_unitary
+                escape_costs[k] = 0
+                for obs in self.observables:
+                    escape_costs[k] += self.obs_qnode(unitary=circuit_unitary_temp,
+                                                      observable=obs)
+            k_max = min(escape_costs, key=escape_costs.get)
+            U_riemann_approx = ssla.expm(
+                -1j * self.eta / 2 ** self.nqubits * self.lastate.full_paulis[k_max])
+            return U_riemann_approx @ circuit_unitary
+        else:
+            adaptive_costs = [np.inf]
+            adaptive_step = 1
+            eta = -np.pi
+            while True:
+                adaptive_costs.append(0)
+                eta += 0.1
+                circuit_unitary_temp = np.copy(circuit_unitary)
+                pauli = self.lastate.full_paulis[self.current_pauli]
+                U_riemann_approx = ssla.expm(-1j* eta * pauli / 2**self.nqubits)
+                circuit_unitary_temp = U_riemann_approx @ circuit_unitary_temp
+                for o in self.observables:
+                    adaptive_costs[adaptive_step] += self.obs_qnode(
+                        unitary=circuit_unitary_temp,
+                        observable=o)
+                # print(adaptive_costs[-1])
+                if adaptive_costs[-1]>adaptive_costs[-2]:
+                    print(
+                        f'Stopped after {adaptive_step}, cost start = {adaptive_costs[0]}, cost stop = {adaptive_costs[-1]}')
+                    break
+                adaptive_step+=1
 
-            U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * omega * pauli)
-            if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
-                U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
-            circuit_unitary = U_riemann_approx @ circuit_unitary
 
-        return circuit_unitary
+            # for oi, obs in enumerate(self.observables_full):
+            #     pauli = self.lastate.full_paulis[self.current_pauli]
+            #     omega = (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi)[0, 0]
+            #     # print(omega)
+            #     U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * omega * pauli)
+            #     if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
+            #         U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
+            #     circuit_unitary = U_riemann_approx @ circuit_unitary
+
+            return circuit_unitary_temp, (self.current_pauli, eta /  2**(self.nqubits-1))
 
     def __repr__(self):
         row_format = "{:^25}|" * 3
@@ -512,19 +541,6 @@ class SquaredLieAlgebraLayer(LieLayer):
 
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
-
-    # def reset_directions(self):
-    #     # self.directions = get_su_2_operators(return_names=True)[1] +\
-    #     #                   get_su_4_operators(return_names=True)[1]
-    #     self.directions = get_su_4_operators(return_names=True)[1]
-    #     self.directions_left = copy.copy(self.directions)
-    #     print('reset directions')
-    #
-    # def reset_qubits(self):
-    #     # self.combinations_1 = list((q,) for q in range(nqubits))
-    #     # self.combinations_2 = list(it.combinations(range(self.nqubits), r=2))
-    #     self.qubits_left = np.zeros(self.nqubits, dtype=int)
-    #     print('reset qubits')
 
 
 class AlgebraSU4():
@@ -548,8 +564,9 @@ class AlgebraSU4():
         self.qubits_left = np.zeros(self.nqubits, dtype=int)
         self.full_paulis = {}
 
-    def get_direction_and_qubits(self):
-        print(self.directions_left, ' - ', self.qubits_left)
+        self.FIRST_CALL = True
+
+    def get_random_direction_and_qubits(self):
         idx = np.where(self.qubits_left == 0)[0].tolist()
         # allow SU(4) samples
         if not idx:
@@ -576,12 +593,28 @@ class AlgebraSU4():
         self.qubits_left[qubits] = 1
         self.add_pauli(direction, qubits)
         self.directions_left.remove(direction)
-
         return direction, qubits
 
+    def get_all_direction_and_qubits(self):
+        idx = np.where(self.qubits_left == 0)[0].tolist()
+        # allow SU(4) samples
+        if not idx:
+            self.reset_qubits()
+            idx = np.where(self.qubits_left == 0)[0].tolist()
+
+        if len(idx) > 1:
+            qubits = [(q,) for q in idx] + list(it.combinations(idx, r=2))
+        else:
+            qubits = [(q,) for q in idx]
+        for direction in self.directions:
+            for q in qubits:
+                if len(q) == len(direction):
+                    self.add_pauli(direction, q)
+
     def add_pauli(self, direction, qubits):
-        self.full_paulis[(direction, *qubits)] = get_full_operator(self.paulis[direction],
-                                                                   qubits, self.nqubits)
+        if (direction, *qubits) not in self.full_paulis.keys():
+            self.full_paulis[(direction, *qubits)] = get_full_operator(self.paulis[direction],
+                                                                       qubits, self.nqubits)
 
     def reset_directions(self, su2_only=False):
         if su2_only:

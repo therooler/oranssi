@@ -37,7 +37,7 @@ def get_su_2_operators(identity: bool = False, return_names: bool = False):
 
 def get_su_4_operators(identity: bool = False, return_names: bool = False):
     """
-    Get the 4x4 SU(2) operators. The dimension of the group is n^2-1, so we have 15 operators.
+    Get the 4x4 SU(4) operators. The dimension of the group is n^2-1, so we have 15 operators.
 
     Args:
         identity: Boolean that flags whether we add the identity to the operators or not
@@ -67,6 +67,40 @@ def get_su_4_operators(identity: bool = False, return_names: bool = False):
     else:
         return operators
 
+def get_su_n_operators(N:int, identity: bool = False, return_names: bool = False):
+    """
+    Get the 2x2 SU(N) operators. The dimension of the group is N^2-1.
+
+    Args:
+        identity: Boolean that flags whether we add the identity to the operators or not
+
+    Returns:
+        List of (N^2)x(N^2) numpy complex arrays
+    """
+    I = np.eye(2, 2, dtype=complex)
+    X = np.array([[0, 1], [1, 0]], complex)
+    Y = np.array([[0, -1j], [1j, 0]], complex)
+    Z = np.array([[1., 0], [0, -1.]], complex)
+    if identity:
+        paulis = [I, X, Y, Z]
+    else:
+        paulis = [X, Y, Z]
+    operators = []
+    names = []
+    N = int(np.log2(N))
+    for comb in it.product(list(range(len(paulis))), repeat=N):
+        op = 1
+        for n in range(N):
+            op = np.kron(op, paulis[comb[n]])
+        operators.append(op)
+        names.append(comb)
+    if return_names:
+        if identity:
+            return operators, [''.join([pauli_int_to_str_id[i] for i in n]) for n in names]
+        else:
+            return operators, [''.join([pauli_int_to_str[i] for i in n])  for n in names]
+    else:
+        return operators
 
 def operator_2_norm(R: np.ndarray) -> float:
     """

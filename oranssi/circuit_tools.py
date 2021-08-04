@@ -2,24 +2,8 @@ import pennylane as qml
 import numpy as np
 from typing import List, Tuple
 import copy
+from oranssi.utils import get_su_n_operators
 
-
-def retraction(circuit, observable, wires, eta):
-    circuit()
-    observable(-np.pi / 2, wires=wires)
-    qml.adjoint(circuit)
-    qml.PhaseShift(-eta / 2, wires=0)
-    qml.X(wires=0)
-    circuit()
-    observable(np.pi / 2, wires=wires)
-    observable(np.pi / 2, wires=wires)
-    qml.adjoint(circuit)
-    qml.PhaseShift(eta / 2, wires=0)
-    qml.X(wires=0)
-    circuit()
-    observable(-np.pi / 2, wires=wires)
-
-    new_circuit = 0
 
 
 def param_shift_comm(rho: np.ndarray, gate) -> np.ndarray:
@@ -33,10 +17,11 @@ def param_shift_comm(rho: np.ndarray, gate) -> np.ndarray:
     Returns:
         Operator corresponding to the commutator [rho, O]
     """
-    return gate(np.pi / 2) @ (rho @ gate(np.pi / 2).conj().T) - gate(-np.pi / 2) @ (rho @ gate(-np.pi / 2).conj().T)
+    return gate(np.pi / 2) @ (rho @ gate(np.pi / 2).conj().T) - gate(-np.pi / 2) @ (
+                rho @ gate(-np.pi / 2).conj().T)
 
 
-def get_full_operator(op: np.ndarray, wires: Tuple[int,...], nqubits: int) -> np.ndarray:
+def get_full_operator(op: np.ndarray, wires: Tuple[int, ...], nqubits: int) -> np.ndarray:
     """
     Takes a local operator `op` acting on `wires` and promotes it to an operatr on the full unitary space
     C^{2^n x 2^n}.
@@ -49,16 +34,18 @@ def get_full_operator(op: np.ndarray, wires: Tuple[int,...], nqubits: int) -> np
     Returns:
         Numpy array of size 2^n x 2^n corresponding to the full unitary.
     """
-    assert max(wires) < nqubits, f'Operator is acting on qubit {max(wires)}, but nqubits is {nqubits}'
+    assert max(
+        wires) < nqubits, f'Operator is acting on qubit {max(wires)}, but nqubits is {nqubits}'
     opsize = int(np.log2(op.shape[0]))
-    assert opsize == len(wires),f'Operator is shape {op.shape} acting on {opsize} qubits, but wires = {wires}'
+    assert opsize == len(
+        wires), f'Operator is shape {op.shape} acting on {opsize} qubits, but wires = {wires}'
     final_operator = np.eye(2 ** nqubits, 2 ** nqubits, dtype=complex).reshape([2] * 2 * nqubits)
     op = op.reshape([2] * 2 * len(wires))
     einsum_indices_operator = list(range(2 * len(wires)))
     einsum_indices_final_operator = list(range(2 * len(wires), 2 * nqubits + 2 * len(wires)))
 
     for i, w in enumerate(wires):
-        einsum_indices_final_operator[w] = einsum_indices_operator[i+len(wires)]
+        einsum_indices_final_operator[w] = einsum_indices_operator[i + len(wires)]
     einsum_indices_operator_out = copy.copy(einsum_indices_final_operator)
     for i, w in enumerate(wires):
         einsum_indices_operator_out[w] = einsum_indices_operator[i]
@@ -112,7 +99,8 @@ def circuit_state_from_unitary(**kwargs):
     return qml.state()
 
 
-def get_ops_from_qnode(circuit, params: List, device: qml.Device) -> Tuple[List, List[Tuple[int, ...]]]:
+def get_ops_from_qnode(circuit, params: List, device: qml.Device) -> Tuple[
+    List, List[Tuple[int, ...]]]:
     """
     Construct the PennyLane circuit and extract the gates in matrix form.
 
@@ -132,3 +120,24 @@ def get_ops_from_qnode(circuit, params: List, device: qml.Device) -> Tuple[List,
         circuit_as_numpy_ops.append(op.matrix)
         circuit_as_numpy_wires.append(op.wires.labels)
     return circuit_as_numpy_ops, circuit_as_numpy_wires
+
+
+def get_hamiltonian_matrix(nqubits, observables, coeffs=None):
+    hamiltonian = np.zeros((2 ** nqubits, 2 ** nqubits), dtype=complex)
+    for o in observables:
+        hamiltonian += get_full_operator(o.matrix, o.wires, nqubits)
+    return hamiltonian
+
+
+def get_all_su_n_directions(unitary, observables, nqubits, dev):
+    observables_full = [get_full_operator(obs.matrix, obs.wires,nqubits) for obs in
+                        observables]
+    paulis, names = get_su_n_operators(2**nqubits, identity=True, return_names=True)
+    circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, dev)
+    phi = circuit_state_from_unitary_qnode(unitary=unitary)[:, np.newaxis]
+    omegas = {}
+    for p,n in zip(paulis, names):
+        omegas[n] = 0
+        for obs in observables_full:
+            omegas[n] += float((phi.conj().T @ (p @ obs - obs @ p) @ phi).imag)
+    return omegas
