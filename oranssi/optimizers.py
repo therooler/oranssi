@@ -99,14 +99,7 @@ def parameter_shift_optimizer(circuit, params: List, observables: List, device: 
     else:
         return tuple(
             returnable for r, returnable in enumerate(returnables) if boolean_returnables[r])
-    # if (return_state & return_params):
-    #     return cost_exact, states, params_per_step
-    # elif return_params:
-    #     return cost_exact, params_per_step
-    # elif return_state:
-    #     return cost_exact, states
-    # else:
-    #     return cost_exact
+
 
 
 def exact_lie_optimizer(circuit, params: List, observables: List, device: qml.Device, **kwargs):
@@ -462,15 +455,7 @@ def local_custom_su_lie_optimizer(circuit, params: List, observables: List, devi
     else:
         return tuple(
             returnable for r, returnable in enumerate(returnables) if boolean_returnables[r])
-    #
-    # if return_state:
-    #     return cost_exact, states
-    # if return_omegas:
-    #     return cost_exact, np.array(omegas)
-    # if (return_state & return_omegas):
-    #     return cost_exact, states, np.array(omegas)
-    # else:
-    #     return cost_exact
+
 
 
 def algebra_custom_su_lie_optimizer(circuit, params: List, observables: List, device: qml.Device,
@@ -864,7 +849,155 @@ def algebra_squared_su_lie_optimizer(circuit, params: List, observables: List,
         # circuit_unitary = layer(circuit_unitary, new_direction=True)
         print(step, ' - ', layer.current_pauli)
         # adaptive_step = 1
-        circuit_unitary, gate = layer(circuit_unitary, new_direction=False)
+        circuit_unitary, gate = layer(circuit_unitary, new_direction=False,
+                                      optimizer=parameter_shift_optimizer,**kwargs)
+        gates.append(gate)
+        for obs in observables:
+            cost_exact[-1] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
+                                                                   observable=obs)
+        # print(adaptive_costs[-1])
+        # while True:
+        #     circuit_unitary = layer(circuit_unitary, new_direction=False)
+        #     adaptive_costs.append(0)
+        #     for o in observables:
+        #         adaptive_costs[adaptive_step] += circuit_observable_from_unitary_qnode(
+        #             unitary=circuit_unitary,
+        #             observable=o)
+        #     adaptive_step += 1
+        #     if np.isclose(adaptive_costs[-1], adaptive_costs[-2], atol=tol):
+        #         print(
+        #             f'Stopped after {adaptive_step}, cost start = {adaptive_costs[0]}, cost stop = {adaptive_costs[-1]}')
+        #         break
+        # cost_exact[step + 1] = np.copy(adaptive_costs[-1])
+        if np.isclose(cost_exact[-1],cost_exact[-2], atol=escape_tol):
+            print('Optimization stuck, attemping escape...')
+            circuit_unitary = layer(circuit_unitary, escape=True)
+        if return_state:
+            states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
+        if return_omegas:
+            omegas.append(layer.get_lie_algebra_directions(circuit_unitary))
+        if return_unitary:
+            unitaries.append(circuit_unitary)
+        if step > 30:
+            if np.isclose(cost_exact[-1], cost_exact[-30], atol=tol):
+                print(f'Cost difference between steps < {tol}, stopping early at step {step}...')
+                break
+    print(f"Final cost = {cost_exact[-1]}")
+    returnables = [cost_exact, states, np.array(omegas), unitaries, gates]
+    boolean_returnables = [True, return_state, return_omegas, return_unitary, return_gates]
+    if sum(boolean_returnables[1:]) < 1:
+        return cost_exact
+    else:
+        return tuple(
+            returnable for r, returnable in enumerate(returnables) if boolean_returnables[r])
+
+
+def algebra_squared_su_lie_optimizer(circuit, params: List, observables: List,
+                                     device: qml.Device, **kwargs):
+    """
+    Riemannian gradient flow on the local unitary group. Implements U_{k+1} = exp(-ia [rho, O]) U_k by projecting
+    the cost function onto SU(p)_loc_4 = (X) SU(4) by way of the matrix exponential. Not hardware
+    friendly.
+
+    Args:
+        circuit: Function with signature (params, **kwargs) that returns a PennyLane state or observable.
+        params: List of parameters for the circuit. If no parameters, should be empty list.
+        observables: List of PennyLane observables.
+        device: PennyLane device.
+        directions: List of strings indicating the Lie algebra directions. If None, take all
+        single and double (odd+even) directions on su(2) and su(4) respectively.
+
+        **kwargs: Possible optimizer arguments:
+            - nsteps: Maximum steps for the optimizer to take.
+            - eta: Learning rate.
+            - tol: Tolerance on the cost for early stopping.
+
+    Returns:
+        List of floats corresponding to the cost.
+    """
+
+    if hasattr(circuit(params), 'return_type'):
+        assert circuit(
+            params).return_type.name == 'State', f"`circuit` must return a state, received" \
+                                                 f" {circuit(params).return_type}"
+    else:
+        raise AssertionError(f"`circuit` must return a state, "
+                             f"received {type(circuit(params))}")
+
+    circuit_as_numpy_ops, circuit_as_numpy_wires = get_ops_from_qnode(circuit, params, device)
+    nqubits = len(device.wires)
+    print(kwargs)
+    nsteps_optimizer = kwargs.get('nsteps', 40)
+
+    assert (isinstance(nsteps_optimizer, int) & (1 <= nsteps_optimizer <= np.inf)), \
+        f'`nsteps` must be an integer between 0 and infinity, received {nsteps_optimizer}'
+    eta = kwargs.get('eta', 0.1)
+    assert (isinstance(eta, float) & (0. <= eta <= 1.)), \
+        f'`eta` must be an float between 0 and 1, received {eta}'
+    tol = kwargs.get('tol', 1e-3)
+    assert (isinstance(tol, float) & (0. <= tol <= np.inf)), \
+        f'`tol` must be an float between 0 and infinity, received {tol}'
+    escape_tol = kwargs.get('escape_tol', 1e-3)
+    assert (isinstance(escape_tol, float)), \
+        f'`escape_tol` must be a boolean, received {escape_tol}'
+    return_state = kwargs.get('return_state', False)
+    assert (isinstance(return_state, bool)), \
+        f'`return_state` must be a boolean, received {return_state}'
+    return_omegas = kwargs.get('return_omegas', False)
+    assert (isinstance(return_omegas, bool)), \
+        f'`return_state` must be a boolean, received {return_omegas}'
+    return_unitary = kwargs.get('return_unitary', False)
+    assert (isinstance(return_unitary, bool)), \
+        f'`return_unitary` must be a boolean, received {return_unitary}'
+    return_gates = kwargs.get('return_gates', False)
+    assert (isinstance(return_gates, bool)), \
+        f'`return_gates` must be a boolean, received {return_gates}'
+
+    print(f"-------------------------------------------------------------------------")
+    print(f"- Riemannian optimization on stochastic SU_4(p) with matrix exponential -")
+    print(f"-------------------------------------------------------------------------")
+    print(f"nqubits = {nqubits} \nlearning rate = {eta} \nconvergence tolerance {tol}")
+    print(f"-------------------------------------------------------------------------")
+
+    circuit_unitary = np.eye(2 ** nqubits, 2 ** nqubits, dtype=complex)
+    for op, wires in zip(circuit_as_numpy_ops, circuit_as_numpy_wires):
+        circuit_unitary = get_full_operator(op, wires, nqubits) @ circuit_unitary
+
+    cost_exact = []
+    states = []
+    omegas = []
+    unitaries = []
+
+    circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
+    circuit_observable_from_unitary_qnode = qml.QNode(circuit_observable_from_unitary, device)
+
+    layer = SquaredLieAlgebraLayer(circuit_state_from_unitary_qnode,
+                                   circuit_observable_from_unitary_qnode, observables, nqubits,
+                                   **kwargs)
+
+    print(f"Square Lie Layer model - nqubits = {nqubits}")
+    print('-' * 80)
+    print('|', ('{:^25}|' * 3).format('name', 'stride', 'Trotterize'))
+    print('-' * 80)
+    print(layer)
+    print('-' * 80)
+
+    if return_state:
+        states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
+    cost_exact.append(0)
+    for obs in observables:
+        cost_exact[0] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,
+                                                               observable=obs)
+    gates = []
+    print(nsteps_optimizer)
+    for step in range(nsteps_optimizer):
+        cost_exact.append(0)
+
+        # circuit_unitary = layer(circuit_unitary, new_direction=True)
+        print(step, ' - ', layer.current_pauli)
+        # adaptive_step = 1
+        circuit_unitary, gate = layer(circuit_unitary, new_direction=False,
+                                      optimizer=parameter_shift_optimizer,**kwargs)
         gates.append(gate)
         for obs in observables:
             cost_exact[-1] += circuit_observable_from_unitary_qnode(unitary=circuit_unitary,

@@ -3,7 +3,8 @@ import numpy as np
 from typing import List, Tuple
 import copy
 from oranssi.utils import get_su_n_operators
-
+import networkx as nx
+from oranssi.edge_coloring import applyHeuristic
 
 
 def param_shift_comm(rho: np.ndarray, gate) -> np.ndarray:
@@ -18,7 +19,7 @@ def param_shift_comm(rho: np.ndarray, gate) -> np.ndarray:
         Operator corresponding to the commutator [rho, O]
     """
     return gate(np.pi / 2) @ (rho @ gate(np.pi / 2).conj().T) - gate(-np.pi / 2) @ (
-                rho @ gate(-np.pi / 2).conj().T)
+            rho @ gate(-np.pi / 2).conj().T)
 
 
 def get_full_operator(op: np.ndarray, wires: Tuple[int, ...], nqubits: int) -> np.ndarray:
@@ -130,14 +131,25 @@ def get_hamiltonian_matrix(nqubits, observables, coeffs=None):
 
 
 def get_all_su_n_directions(unitary, observables, nqubits, dev):
-    observables_full = [get_full_operator(obs.matrix, obs.wires,nqubits) for obs in
+    observables_full = [get_full_operator(obs.matrix, obs.wires, nqubits) for obs in
                         observables]
-    paulis, names = get_su_n_operators(2**nqubits, identity=True, return_names=True)
+    paulis, names = get_su_n_operators(2 ** nqubits, identity=True, return_names=True)
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, dev)
     phi = circuit_state_from_unitary_qnode(unitary=unitary)[:, np.newaxis]
     omegas = {}
-    for p,n in zip(paulis, names):
+    for p, n in zip(paulis, names):
         omegas[n] = 0
         for obs in observables_full:
             omegas[n] += float((phi.conj().T @ (p @ obs - obs @ p) @ phi).imag)
     return omegas
+
+
+def get_commuting_set(edge_list):
+    unrolled_edges = [item for sublist in edge_list for item in sublist]
+    if len(unrolled_edges)==len(set(unrolled_edges)):
+        return edge_list
+    else:
+        g = nx.from_edgelist(edge_list)
+        applyHeuristic(g, 2, 50, 50)
+        edge_coloring = [e for e in g.edges() if g[e[0]][e[1]]['color'] == 0]
+        return edge_coloring

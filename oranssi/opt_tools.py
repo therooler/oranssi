@@ -2,13 +2,14 @@ import copy
 
 import numpy as np
 import scipy.linalg as ssla
+import pennylane as qml
 
 from typing import List
 import itertools as it
 
+
 from oranssi.circuit_tools import get_full_operator
 from oranssi.utils import get_su_2_operators, get_su_4_operators
-
 
 class LieLayer(object):
     def __init__(self, state_qnode, observables: List, nqubits: int):
@@ -462,25 +463,13 @@ class SquaredLieAlgebraLayer(LieLayer):
         # initialize
         self.current_pauli, self.previous_pauli = None, ('Null', 0)
         self.lastate.get_all_direction_and_qubits()
+        self.dev = qml.device('default.qubit', wires=self.nqubits)
 
     def __call__(self, circuit_unitary, *args, **kwargs):
         phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
         # new_direction = kwargs.get('new_direction', False)
         escape = kwargs.get('escape', False)
-
-        # if new_direction:
-        omegas = {}
-        for k, pauli in self.lastate.full_paulis.items():
-            if k != self.previous_pauli:
-                omegas[k] = 0
-                for oi, obs in enumerate(self.observables_full):
-                    omegas[k] += float(
-                        (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
-                omegas[k] = abs(omegas[k])
-        k_max = max(omegas, key=omegas.get)
-        self.current_pauli = k_max
-        self.previous_pauli = k_max
-
+        commute = kwargs.get('commute', False)
         if escape:
             escape_costs = {}
             for k, pauli in self.lastate.full_paulis.items():
@@ -495,38 +484,82 @@ class SquaredLieAlgebraLayer(LieLayer):
                 -1j * self.eta / 2 ** self.nqubits * self.lastate.full_paulis[k_max])
             return U_riemann_approx @ circuit_unitary
         else:
-            adaptive_costs = [np.inf]
-            adaptive_step = 1
-            eta = -np.pi
-            while True:
-                adaptive_costs.append(0)
-                eta += 0.1
-                circuit_unitary_temp = np.copy(circuit_unitary)
-                pauli = self.lastate.full_paulis[self.current_pauli]
-                U_riemann_approx = ssla.expm(-1j* eta * pauli / 2**self.nqubits)
-                circuit_unitary_temp = U_riemann_approx @ circuit_unitary_temp
-                for o in self.observables:
-                    adaptive_costs[adaptive_step] += self.obs_qnode(
-                        unitary=circuit_unitary_temp,
-                        observable=o)
-                # print(adaptive_costs[-1])
-                if adaptive_costs[-1]>adaptive_costs[-2]:
-                    print(
-                        f'Stopped after {adaptive_step}, cost start = {adaptive_costs[0]}, cost stop = {adaptive_costs[-1]}')
-                    break
-                adaptive_step+=1
+            omegas = {}
+            for k, pauli in self.lastate.full_paulis.items():
+                if k != self.previous_pauli:
+                    omegas[k] = 0
+                    for oi, obs in enumerate(self.observables_full):
+                        # print(self.observables[oi])
+                        # print((pauli @ obs - obs @ pauli))
+                        omegas[k] += float(
+                            (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+                        # print(k,'k',omegas[k])
+                    omegas[k] = abs(omegas[k])
+            print(omegas)
+            if commute:
+                max_value = max(omegas.values())
+                # get the maximum gradients
+                max_omegas = [k for k, v in omegas.items() if np.isclose(v, max_value, atol=1e-3)]
 
 
-            # for oi, obs in enumerate(self.observables_full):
-            #     pauli = self.lastate.full_paulis[self.current_pauli]
-            #     omega = (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi)[0, 0]
-            #     # print(omega)
-            #     U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * omega * pauli)
-            #     if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
-            #         U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
-            #     circuit_unitary = U_riemann_approx @ circuit_unitary
+                # select arbitrary direction from among them
+                direction = max_omegas[0][0]
+                print(direction)
+                max_omega_edge_list = [tuple(om[1:]) for om in max_omegas if om[0]==direction]
+                print(max_omega_edge_list)
+                filtered_edges = get_commuting_set(max_omega_edge_list)
+                print(filtered_edges)
 
-            return circuit_unitary_temp, (self.current_pauli, eta /  2**(self.nqubits-1))
+                def circuit_lie(params, **kwargs):
+                    qml.QubitUnitary(circuit_unitary, wires=list(range(self.nqubits)))
+                    for i, edge in enumerate(filtered_edges):
+                        qml.PauliRot(params[i], direction, wires=edge)
+
+                params = [0.1 for _ in filtered_edges]
+                parameter_shift_optimizer = kwargs.get('optimizer', None)
+                costs, params = parameter_shift_optimizer(circuit_lie, params, self.observables,
+                                                  device=self.dev, return_params=True, eta=0.05, nsteps=200, tol=1e-5)
+                print(costs)
+                for i, edge in enumerate(filtered_edges):
+                    U_riemann_approx = ssla.expm(-1j * params[-1][i]* self.lastate.full_paulis[(direction, *edge)] / 2)
+                    circuit_unitary = U_riemann_approx @ circuit_unitary
+                return circuit_unitary, [((direction, *edge), params[-1][i]) for i, edge in enumerate(filtered_edges)]
+            else:
+                k_max = max(omegas, key=omegas.get)
+                self.current_pauli = k_max
+                self.previous_pauli = k_max
+                adaptive_costs = [np.inf]
+                adaptive_step = 1
+                eta = -np.pi
+                while True:
+                    adaptive_costs.append(0)
+                    eta += 0.1
+                    circuit_unitary_temp = np.copy(circuit_unitary)
+                    pauli = self.lastate.full_paulis[self.current_pauli]
+                    U_riemann_approx = ssla.expm(-1j* eta * pauli / 2**self.nqubits)
+                    circuit_unitary_temp = U_riemann_approx @ circuit_unitary_temp
+                    for o in self.observables:
+                        adaptive_costs[adaptive_step] += self.obs_qnode(
+                            unitary=circuit_unitary_temp,
+                            observable=o)
+                    # print(adaptive_costs[-1])
+                    if adaptive_costs[-1]>adaptive_costs[-2]:
+                        print(
+                            f'Stopped after {adaptive_step}, cost start = {adaptive_costs[0]}, cost stop = {adaptive_costs[-1]}')
+                        break
+                    adaptive_step+=1
+
+
+                # for oi, obs in enumerate(self.observables_full):
+                #     pauli = self.lastate.full_paulis[self.current_pauli]
+                #     omega = (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi)[0, 0]
+                #     # print(omega)
+                #     U_riemann_approx = ssla.expm(- self.eta / 2 ** self.nqubits * omega * pauli)
+                #     if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
+                #         U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
+                #     circuit_unitary = U_riemann_approx @ circuit_unitary
+
+                return circuit_unitary_temp, (self.current_pauli, eta /  2**(self.nqubits-1))
 
     def __repr__(self):
         row_format = "{:^25}|" * 3
