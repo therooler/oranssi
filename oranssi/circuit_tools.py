@@ -131,6 +131,18 @@ def get_hamiltonian_matrix(nqubits, observables, coeffs=None):
 
 
 def get_all_su_n_directions(unitary, observables, nqubits, dev):
+    """
+    Get all SU(2^N) directions in a dictionary where the keys are Pauli words
+
+    Args:
+        unitary:
+        observables:
+        nqubits:
+        dev:
+
+    Returns:
+
+    """
     observables_full = [get_full_operator(obs.matrix, obs.wires, nqubits) for obs in
                         observables]
     paulis, names = get_su_n_operators(2 ** nqubits, identity=True, return_names=True)
@@ -145,6 +157,15 @@ def get_all_su_n_directions(unitary, observables, nqubits, dev):
 
 
 def get_commuting_set(edge_list):
+    """
+    Find a set of non-overlapping bond given a set of edges
+
+    Args:
+        edge_list:
+
+    Returns:
+
+    """
     unrolled_edges = [item for sublist in edge_list for item in sublist]
     if len(unrolled_edges)==len(set(unrolled_edges)):
         return edge_list

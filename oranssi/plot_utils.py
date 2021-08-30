@@ -1,9 +1,14 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from oranssi.utils import get_su_2_operators
+from oranssi.circuit_tools import get_all_su_n_directions
 
 plt.rc('font', family='serif')
-
+LABELSIZE=15
+LINEWIDTH = 3
+MARKERSIZE = 10
+blues = plt.get_cmap('Blues')
+reds = plt.get_cmap('Reds')
 
 def spherical_to_state(phi, theta):
     """
@@ -86,3 +91,83 @@ def change_label_fontsize(ax: plt.Axes, newsize: int):
     for item in ([ax.xaxis.label, ax.yaxis.label] +
                  ax.get_xticklabels() + ax.get_yticklabels()):
         item.set_fontsize(newsize)
+
+
+def plot_su16_directions_separate(nqubits:int, unitaries, observables, device):
+    omegas = []
+    for uni in unitaries:
+        omegas.append(get_all_su_n_directions(uni, observables, nqubits, device))
+
+    fig, axs = plt.subplots(2, 2)
+    fig.set_size_inches(16, 16)
+
+    keys = list(omegas[0].keys())
+
+    axs[0, 0].set_prop_cycle('color', plt.cm.Blues(
+        np.linspace(0, 1, sum(1 if k.count('I') == 3 else 0 for k in keys) + 1)))
+    axs[0, 1].set_prop_cycle('color', plt.cm.Reds(
+        np.linspace(0, 1, sum(1 if k.count('I') == 2 else 0 for k in keys) + 1)))
+    axs[1, 0].set_prop_cycle('color', plt.cm.Greens(
+        np.linspace(0, 1, sum(1 if k.count('I') == 1 else 0 for k in keys) + 1)))
+    axs[1, 1].set_prop_cycle('color', plt.cm.Purples(
+        np.linspace(0, 1, sum(1 if k.count('I') == 0 else 0 for k in keys) + 1)))
+
+    stepstotal = len([om['XXXX'] for om in omegas])
+    omegas_length_m = {0: np.zeros(stepstotal), 1: np.zeros(stepstotal), 2: np.zeros(stepstotal),
+                       3: np.zeros(stepstotal)}
+
+    for k in omegas[0].keys():
+        if k.count('I') == 3:
+            omegas_length_m[3] += np.abs([om[k] for om in omegas])
+            axs[0, 0].plot([om[k] for om in omegas], label=k)
+        if k.count('I') == 2:
+            omegas_length_m[2] += np.abs([om[k] for om in omegas])
+            axs[0, 1].plot([om[k] for om in omegas], label=k)
+        if k.count('I') == 1:
+            omegas_length_m[1] += np.abs([om[k] for om in omegas])
+            axs[1, 0].plot([om[k] for om in omegas], label=k)
+        if k.count('I') == 0:
+            omegas_length_m[0] += np.abs([om[k] for om in omegas])
+            axs[1, 1].plot([om[k] for om in omegas], label=k)
+    for a in axs.flatten():
+        change_label_fontsize(a, 15)
+        a.legend()
+        a.set_xlabel('Step')
+        a.set_ylabel(r'$\omega_i$')
+        a.legend()
+    return fig, axs
+
+def plot_su16_directions(nqubits:int, unitaries, observables, device):
+    omegas = []
+    for uni in unitaries:
+        omegas.append(get_all_su_n_directions(uni, observables, nqubits, device))
+
+    fig, axs = plt.subplots(1, 1)
+    fig.set_size_inches(6, 6)
+
+    stepstotal = len([om['XXXX'] for om in omegas])
+    omegas_length_m = {0: np.zeros(stepstotal), 1: np.zeros(stepstotal), 2: np.zeros(stepstotal),
+                       3: np.zeros(stepstotal)}
+
+    for k in omegas[0].keys():
+        if k.count('I') == 3:
+            omegas_length_m[3] += np.abs([om[k] for om in omegas])
+        if k.count('I') == 2:
+            omegas_length_m[2] += np.abs([om[k] for om in omegas])
+        if k.count('I') == 1:
+            omegas_length_m[1] += np.abs([om[k] for om in omegas])
+        if k.count('I') == 0:
+            omegas_length_m[0] += np.abs([om[k] for om in omegas])
+
+    axs.plot([0 for _ in range(len(omegas_length_m[0]))], label='Min.', color='Black',
+             linestyle='--')
+
+    cmap = plt.get_cmap('Set1')
+    for i in range(4):
+        axs.plot(omegas_length_m[i], label=rf'SU$({2 ** (4 - i)})$', color=cmap((i + 1) / 5),
+                 linewidth=LINEWIDTH)
+        axs.set_xlabel('Step')
+        axs.set_ylabel(r'$\sum_i |\omega_i|$')
+    axs.legend()
+    change_label_fontsize(axs, LABELSIZE)
+    return fig, axs

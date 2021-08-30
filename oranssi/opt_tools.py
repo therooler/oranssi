@@ -7,9 +7,9 @@ import pennylane as qml
 from typing import List
 import itertools as it
 
+from oranssi.circuit_tools import get_full_operator, get_commuting_set, get_ops_from_qnode
+from oranssi.utils import get_su_2_operators, get_su_4_operators, get_su_n_operators
 
-from oranssi.circuit_tools import get_full_operator
-from oranssi.utils import get_su_2_operators, get_su_4_operators
 
 class LieLayer(object):
     def __init__(self, state_qnode, observables: List, nqubits: int):
@@ -462,7 +462,7 @@ class SquaredLieAlgebraLayer(LieLayer):
                                                   f'received {type(self.trotterize)}'
         # initialize
         self.current_pauli, self.previous_pauli = None, ('Null', 0)
-        self.lastate.get_all_direction_and_qubits()
+        self.lastate.get_all_directions_and_qubits()
         self.dev = qml.device('default.qubit', wires=self.nqubits)
 
     def __call__(self, circuit_unitary, *args, **kwargs):
@@ -501,11 +501,10 @@ class SquaredLieAlgebraLayer(LieLayer):
                 # get the maximum gradients
                 max_omegas = [k for k, v in omegas.items() if np.isclose(v, max_value, atol=1e-3)]
 
-
                 # select arbitrary direction from among them
                 direction = max_omegas[0][0]
                 print(direction)
-                max_omega_edge_list = [tuple(om[1:]) for om in max_omegas if om[0]==direction]
+                max_omega_edge_list = [tuple(om[1:]) for om in max_omegas if om[0] == direction]
                 print(max_omega_edge_list)
                 filtered_edges = get_commuting_set(max_omega_edge_list)
                 print(filtered_edges)
@@ -518,12 +517,15 @@ class SquaredLieAlgebraLayer(LieLayer):
                 params = [0.1 for _ in filtered_edges]
                 parameter_shift_optimizer = kwargs.get('optimizer', None)
                 costs, params = parameter_shift_optimizer(circuit_lie, params, self.observables,
-                                                  device=self.dev, return_params=True, eta=0.05, nsteps=200, tol=1e-5)
+                                                          device=self.dev, return_params=True,
+                                                          eta=0.05, nsteps=200, tol=1e-5)
                 print(costs)
                 for i, edge in enumerate(filtered_edges):
-                    U_riemann_approx = ssla.expm(-1j * params[-1][i]* self.lastate.full_paulis[(direction, *edge)] / 2)
+                    U_riemann_approx = ssla.expm(
+                        -1j * params[-1][i] * self.lastate.full_paulis[(direction, *edge)] / 2)
                     circuit_unitary = U_riemann_approx @ circuit_unitary
-                return circuit_unitary, [((direction, *edge), params[-1][i]) for i, edge in enumerate(filtered_edges)]
+                return circuit_unitary, [((direction, *edge), params[-1][i]) for i, edge in
+                                         enumerate(filtered_edges)]
             else:
                 k_max = max(omegas, key=omegas.get)
                 self.current_pauli = k_max
@@ -536,19 +538,18 @@ class SquaredLieAlgebraLayer(LieLayer):
                     eta += 0.1
                     circuit_unitary_temp = np.copy(circuit_unitary)
                     pauli = self.lastate.full_paulis[self.current_pauli]
-                    U_riemann_approx = ssla.expm(-1j* eta * pauli / 2**self.nqubits)
+                    U_riemann_approx = ssla.expm(-1j * eta * pauli / 2 ** self.nqubits)
                     circuit_unitary_temp = U_riemann_approx @ circuit_unitary_temp
                     for o in self.observables:
                         adaptive_costs[adaptive_step] += self.obs_qnode(
                             unitary=circuit_unitary_temp,
                             observable=o)
                     # print(adaptive_costs[-1])
-                    if adaptive_costs[-1]>adaptive_costs[-2]:
+                    if adaptive_costs[-1] > adaptive_costs[-2]:
                         print(
                             f'Stopped after {adaptive_step}, cost start = {adaptive_costs[0]}, cost stop = {adaptive_costs[-1]}')
                         break
-                    adaptive_step+=1
-
+                    adaptive_step += 1
 
                 # for oi, obs in enumerate(self.observables_full):
                 #     pauli = self.lastate.full_paulis[self.current_pauli]
@@ -559,7 +560,7 @@ class SquaredLieAlgebraLayer(LieLayer):
                 #         U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
                 #     circuit_unitary = U_riemann_approx @ circuit_unitary
 
-                return circuit_unitary_temp, (self.current_pauli, eta /  2**(self.nqubits-1))
+                return circuit_unitary_temp, (self.current_pauli, eta / 2 ** (self.nqubits - 1))
 
     def __repr__(self):
         row_format = "{:^25}|" * 3
@@ -574,6 +575,298 @@ class SquaredLieAlgebraLayer(LieLayer):
 
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
+
+
+class SquaredLieAlgebraLayer_v2(LieLayer):
+    def __init__(self, state_qnode, obs_qnode, observables: List, nqubits: int,
+                 **kwargs):
+        """
+        Class that applies a Riemannian optimization step by searching over the optimal direction
+        Uses the matrix exponential to calculate the exact operator of the commutator.
+        Trotterization applies only on the level of observables, NOT on the level of individual SU(p) terms.
+
+        Args:
+            state_qnode: QNode of a circuit that takes a unitary and returns a state.
+            observables: List of single qubit Pauli observables.
+            nqubits: The number of qubits in the circuit.
+            directions: List of strings containing the allowed directions.
+            **kwargs: Additional keyword arguments are
+                - eta: the stepsize
+                - unitary_error_check: Boolean that flags whether to check if the resulting unitary is a valid
+                unitary operator.
+                -
+        """
+        super().__init__(state_qnode, observables, nqubits)
+
+        self.state_qnode = state_qnode
+        self.obs_qnode = obs_qnode
+        self.eta = kwargs.get('eta', 0.1)
+        assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
+            f'`eta` must be an float between 0 and 1, received {self.eta}'
+        self.eta = kwargs.get('eta', 0.1)
+        assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
+            f'`eta` must be an float between 0 and 1, received {self.eta}'
+        self.nqubits = nqubits
+        self.lastate = AlgebraSU4(nqubits, add_su2=True)
+        self.observables = observables
+        self.observables_full = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
+                                 observables]
+        self.unitary_error_check = kwargs.get('unitary_error_check', False)
+        assert isinstance(self.unitary_error_check,
+                          bool), f'`unitary_error_check` must be a boolean, ' \
+                                 f'received {type(self.unitary_error_check)}'
+        self.trotterize = kwargs.get('trotterize', False)
+        assert isinstance(self.trotterize, bool), f'`trotterize` must be a boolean, ' \
+                                                  f'received {type(self.trotterize)}'
+        # initialize
+        self.current_pauli, self.previous_direction = None, ('Null', 0)
+        self.lastate.get_all_directions_and_qubits()
+        self.dev = qml.device('default.qubit', wires=self.nqubits)
+        self.layers = []
+
+    def __call__(self, circuit_unitary, *args, **kwargs):
+        phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
+        circuit = kwargs.get('circuit')
+        params_ext = kwargs.get('params')
+        ps_optimizer = kwargs.get('optimizer')
+        omegas = {}
+        layer_omegas = {}
+        for k, pauli in self.lastate.full_paulis.items():
+            omegas[k] = 0
+            for oi, obs in enumerate(self.observables_full):
+                # print(self.observables[oi])
+                omegas[k] += float((phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+                # print(k, 'k', omegas[k])
+            omegas[k] = abs(omegas[k])
+
+        for direction in self.lastate.directions:
+            if direction != self.previous_direction:
+                if len(direction) == 1:
+                    layer_omegas[(direction, 'single')] = sum(
+                        [omegas[(direction, i)] for i in range(self.nqubits)])
+                else:
+                    layer_omegas[(direction, 'even')] = sum(
+                        [omegas[(direction, i, i + 1)] for i in range(0, self.nqubits - 1, 2)])
+                    layer_omegas[(direction, 'odd')] = sum(
+                        [omegas[(direction, i, i + 1)] for i in range(1, self.nqubits - 1, 2)]) + \
+                                                       omegas[(direction, 0, self.nqubits - 1)]
+        print(layer_omegas)
+        k_max = max(layer_omegas, key=layer_omegas.get)
+        self.layers.append(k_max)
+        self.previous_direction = k_max[0]
+        print(self.layers)
+        single_layer = {'X': qml.RX, 'Y': qml.RY, 'Z': qml.RZ}
+
+        def circuit_vqe(params, **kwargs):
+            for j in range(self.nqubits):
+                qml.Hadamard(wires=j)
+            #     qml.RX(0.1, wires=j)
+            for j, layer in enumerate(self.layers):
+                if len(layer[0]) == 1:
+                    for i in range(0, self.nqubits):
+                        single_layer[layer[0]](params[j][i], wires=i)
+
+                else:
+                    if layer[1] == 'even':
+                        for idx, i in enumerate(range(0, self.nqubits - 1, 2)):
+                            qml.PauliRot(params[j][idx], layer[0], wires=(i, i + 1))
+                    else:
+                        for idx, i in enumerate(range(1, self.nqubits - 1, 2)):
+                            qml.PauliRot(params[j][idx], layer[0], wires=(i, i + 1))
+                        qml.PauliRot(params[j][-1], layer[0], wires=(0, self.nqubits - 1))
+
+        params_ext.append([0.1 for _ in range(self.nqubits)])
+        # print(params_ext)
+        costs, params_ext = ps_optimizer(circuit_vqe, params_ext, self.observables, self.dev,
+                                         return_params=True, eta=0.01, tol=1e-5)
+        circuit_unitary = np.eye(2 ** self.nqubits, 2 ** self.nqubits, dtype=complex)
+
+        def circuit_vqe_state(params, **kwargs):
+            circuit_vqe(params, **kwargs)
+            return qml.state()
+
+        circuit_as_numpy_ops, circuit_as_numpy_wires = get_ops_from_qnode(circuit_vqe_state,
+                                                                          params_ext[-1].tolist(),
+                                                                          self.dev)
+
+        for op, wires in zip(circuit_as_numpy_ops, circuit_as_numpy_wires):
+            circuit_unitary = get_full_operator(op, wires, self.nqubits) @ circuit_unitary
+
+        return circuit_unitary, params_ext[-1].tolist()
+
+    def __repr__(self):
+        row_format = "{:^25}|" * 3
+        return "| " + \
+               row_format.format(f'Stoch. Algebra Layer SU({2 ** self.nqubits})', 'NaN',
+                                 self.trotterize) + " directions -> " + ", ".join(
+            self.lastate.directions)
+
+    def get_lie_algebra_directions(self, circuit_unitary):
+
+        raise NotImplementedError
+
+    def get_lie_algebra_directions_strings(self):
+        return self.lastate.directions
+
+
+class SU8_AlgebraLayer(LieLayer):
+    def __init__(self, state_qnode, obs_qnode, observables: List, nqubits: int,
+                 **kwargs):
+        """
+        Class that applies a Riemannian optimization step by searching over the optimal direction
+        Uses the matrix exponential to calculate the exact operator of the commutator.
+        Trotterization applies only on the level of observables, NOT on the level of individual SU(p) terms.
+
+        Args:
+            state_qnode: QNode of a circuit that takes a unitary and returns a state.
+            observables: List of single qubit Pauli observables.
+            nqubits: The number of qubits in the circuit.
+            directions: List of strings containing the allowed directions.
+            **kwargs: Additional keyword arguments are
+                - eta: the stepsize
+                - unitary_error_check: Boolean that flags whether to check if the resulting unitary is a valid
+                unitary operator.
+                -
+        """
+        super().__init__(state_qnode, observables, nqubits)
+
+        self.state_qnode = state_qnode
+        self.obs_qnode = obs_qnode
+        self.eta = kwargs.get('eta', 0.1)
+        assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
+            f'`eta` must be an float between 0 and 1, received {self.eta}'
+        self.eta = kwargs.get('eta', 0.1)
+        assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
+            f'`eta` must be an float between 0 and 1, received {self.eta}'
+        self.nqubits = nqubits
+        self.lastate = AlgebraSU8(nqubits,
+                                  add_su2=kwargs.get('add_su2',True),
+                                  add_su4=kwargs.get('add_su4',True))
+        self.observables = observables
+        self.observables_full = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
+                                 observables]
+        self.unitary_error_check = kwargs.get('unitary_error_check', False)
+        assert isinstance(self.unitary_error_check,
+                          bool), f'`unitary_error_check` must be a boolean, ' \
+                                 f'received {type(self.unitary_error_check)}'
+        self.trotterize = kwargs.get('trotterize', False)
+        assert isinstance(self.trotterize, bool), f'`trotterize` must be a boolean, ' \
+                                                  f'received {type(self.trotterize)}'
+        # initialize
+        self.current_pauli, self.previous_pauli = None, ('Null', 0)
+        self.lastate.get_all_directions_and_qubits()
+        self.dev = qml.device('default.qubit', wires=self.nqubits)
+        self.layers = []
+
+    def __call__(self, circuit_unitary, *args, **kwargs):
+        phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
+        omegas = {}
+        for k, pauli in self.lastate.full_paulis.items():
+            omegas[k] = 0
+            for oi, obs in enumerate(self.observables_full):
+                omegas[k] += float((phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+            omegas[k] = abs(omegas[k])
+            # print(omegas[k])
+        k_max = max(omegas, key=omegas.get)
+        max_omegas = [k for k, v in omegas.items() if np.isclose(v, omegas[k_max], atol=1e-3)]
+        # select arbitrary direction from among them
+        self.current_pauli = k_max
+        self.previous_pauli = k_max
+        adaptive_costs = [np.inf]
+        adaptive_step = 1
+        eta = -np.pi
+        while True:
+            adaptive_costs.append(0)
+            eta += 0.1
+            circuit_unitary_temp = np.copy(circuit_unitary)
+            pauli = self.lastate.full_paulis[self.current_pauli]
+            U_riemann_approx = ssla.expm(-1j * eta * pauli / 2 ** self.nqubits)
+            circuit_unitary_temp = U_riemann_approx @ circuit_unitary_temp
+            for o in self.observables:
+                adaptive_costs[adaptive_step] += self.obs_qnode(
+                    unitary=circuit_unitary_temp,
+                    observable=o)
+            if adaptive_costs[-1] > adaptive_costs[-2]:
+                print(
+                    f'Stopped after {adaptive_step}, cost start = {adaptive_costs[0]}, cost stop = {adaptive_costs[-1]}')
+                break
+            adaptive_step += 1
+
+        return circuit_unitary_temp, (self.current_pauli, eta / 2 ** (self.nqubits - 1))
+
+
+    def __repr__(self):
+        row_format = "{:^25}|" * 3
+        return "| " + \
+               row_format.format(f'SU(8) Layer SU({2 ** self.nqubits})', 'NaN',
+                                 self.trotterize) + " directions -> " + ", ".join(
+            self.lastate.directions)
+
+    def get_lie_algebra_directions(self, circuit_unitary):
+
+        raise NotImplementedError
+
+    def get_lie_algebra_directions_strings(self):
+        return self.lastate.directions
+
+
+class AlgebraLayers():
+    def __init__(self, nqubits, add_su2: bool = False, periodic: bool = False):
+        self.nqubits = nqubits
+        self.add_su2 = add_su2
+        self.periodic = periodic
+        if add_su2:
+            self.paulis = get_su_2_operators(return_names=False) + \
+                          get_su_4_operators(return_names=False)
+            self.directions = get_su_2_operators(return_names=True)[1] + \
+                              get_su_4_operators(return_names=True)[1]
+        else:
+            self.paulis = get_su_4_operators(return_names=False)
+            self.directions = get_su_4_operators(return_names=True)[1]
+
+        self.paulis = dict(zip(self.directions, self.paulis))
+
+        self.full_paulis = {}
+
+    def get_random_direction_and_qubits(self):
+        raise NotImplementedError
+
+    def get_all_directions_and_qubits(self):
+
+        for direction in self.directions:
+            if len(direction) == 2:
+                self.add_su4_layers(direction)
+            elif len(direction) == 1:
+                if (direction, 'single') not in self.full_paulis.keys():
+                    self.full_paulis[(direction, 'single')] = np.eye(2 ** self.nqubits,
+                                                                     2 ** self.nqubits,
+                                                                     dtype=complex)
+                    for i in range(0, self.nqubits):
+                        self.full_paulis[(direction, 'single')] = get_full_operator(
+                            self.paulis[direction], (i,), self.nqubits) @ self.full_paulis[
+                                                                      (direction, 'single')]
+
+    def add_su4_layers(self, direction):
+        if (direction, 'even') not in self.full_paulis.keys():
+            self.full_paulis[(direction, 'even')] = np.eye(2 ** self.nqubits, 2 ** self.nqubits,
+                                                           dtype=complex)
+            for i in range(0, self.nqubits, 2):
+                self.full_paulis[(direction, 'even')] = get_full_operator(self.paulis[direction],
+                                                                          (i, i + 1), self.nqubits) \
+                                                        @ self.full_paulis[(direction, 'even')]
+        elif (direction, 'odd') not in self.full_paulis.keys():
+            self.full_paulis[(direction, 'odd')] = np.eye(2 ** self.nqubits, 2 ** self.nqubits,
+                                                          dtype=complex)
+            for i in range(1, self.nqubits, 2):
+                self.full_paulis[(direction, 'odd')] = get_full_operator(self.paulis[direction],
+                                                                         (i, i + 1), self.nqubits) \
+                                                       @ self.full_paulis[(direction, 'even')]
+                print(direction, i, i + 1)
+
+            if self.periodic:
+                self.full_paulis[(direction, 'odd')] = get_full_operator(self.paulis[direction],
+                                                                         (-1, 0), self.nqubits) \
+                                                       @ self.full_paulis[(direction, 'even')]
 
 
 class AlgebraSU4():
@@ -628,7 +921,7 @@ class AlgebraSU4():
         self.directions_left.remove(direction)
         return direction, qubits
 
-    def get_all_direction_and_qubits(self):
+    def get_all_directions_and_qubits(self):
         idx = np.where(self.qubits_left == 0)[0].tolist()
         # allow SU(4) samples
         if not idx:
@@ -657,3 +950,42 @@ class AlgebraSU4():
 
     def reset_qubits(self):
         self.qubits_left = np.zeros(self.nqubits, dtype=int)
+
+
+class AlgebraSU8():
+    def __init__(self, nqubits, add_su2: bool = False, add_su4: bool = False):
+        self.nqubits = nqubits
+        self.add_su2 = add_su2
+        self.add_su4 = add_su4
+        to_add_bool = [add_su2, add_su4, True]
+        to_add_paulis = [lambda: get_su_2_operators(return_names=True),
+                         lambda: get_su_4_operators(return_names=True),
+                         lambda: get_su_n_operators(8, return_names=True)]
+        p_d_list = [to_add_paulis[i]() for i, check in enumerate(to_add_bool) if check]
+
+        self.paulis = [item for sublist in p_d_list for item in sublist[0]]
+        self.directions = [item for sublist in p_d_list for item in sublist[1]]
+        self.qubits = {3: list(it.combinations(range(self.nqubits), r=3))}
+        if add_su2:
+            self.qubits[1] = list((i,) for i in range(self.nqubits))
+        if add_su4:
+            self.qubits[2] = list(it.combinations(range(self.nqubits), r=2))
+
+
+        self.paulis = dict(zip(self.directions, self.paulis))
+
+        self.full_paulis = {}
+
+    def get_random_direction_and_qubits(self):
+        raise NotImplementedError
+
+    def get_all_directions_and_qubits(self):
+
+        for direction in self.directions:
+            for q in self.qubits[len(direction)]:
+                self.add_pauli(direction, q)
+
+    def add_pauli(self, direction, qubits):
+        if (direction, *qubits) not in self.full_paulis.keys():
+            self.full_paulis[(direction, *qubits)] = get_full_operator(self.paulis[direction],
+                                                                       qubits, self.nqubits)
