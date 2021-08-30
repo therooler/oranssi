@@ -1,10 +1,11 @@
 import pennylane as qml
 from oranssi.optimizers import parameter_shift_optimizer, local_custom_su_lie_optimizer, \
     local_su_4_lie_optimizer
-from oranssi.plot_utils import change_label_fontsize, LABELSIZE, LINEWIDTH, reds, blues
-from oranssi.circuit_tools import get_all_su_n_directions
+from oranssi.plot_utils import change_label_fontsize, LABELSIZE, LINEWIDTH, reds, blues, plot_su16_directions
+from oranssi.circuit_tools import get_all_su_n_directions, get_hamiltonian_matrix
 import matplotlib.pyplot as plt
 import numpy as np
+import os
 
 nqubits = 4
 device = qml.device('default.qubit', wires=nqubits)
@@ -44,9 +45,10 @@ def circuit(params, **kwargs):
         qml.Hadamard(wires=n)
 
     return qml.state()
+H = get_hamiltonian_matrix(nqubits, observables)
+eigvals = np.linalg.eigvalsh(H)
 
-
-costs_lie, unitaries = local_custom_su_lie_optimizer(circuit, params=init_params, layer_pattern=[(2, 0)],
+costs_exact, unitaries = local_custom_su_lie_optimizer(circuit, params=init_params, layer_pattern=[(2, 0)],
                                                 observables=observables,
                                                 device=device, eta=.1, nsteps=150,
                                                 tol=1e-6, trotterize=True,
@@ -55,47 +57,34 @@ costs_lie, unitaries = local_custom_su_lie_optimizer(circuit, params=init_params
 fig, axs = plt.subplots(1, 1)
 fig.set_size_inches(6, 6)
 axs.plot(costs, color=reds(0.7), label='VQE Opt.', linewidth=LINEWIDTH)
-axs.plot(costs_lie, color=blues(0.7), label='Riemann Opt.', linewidth=LINEWIDTH)
+axs.plot(costs_exact, color=blues(0.7), label='Riemann Opt.', linewidth=LINEWIDTH)
 axs.set_xlabel('Step')
 axs.set_ylabel(r'$\langle H \rangle$')
-axs.plot(range(max(len(costs), len(costs_lie))),
-         [-5.226251859505502 for _ in range(max(len(costs), len(costs_lie)))],
+axs.plot(range(max(len(costs), len(costs_exact))),
+         [-5.226251859505502 for _ in range(max(len(costs), len(costs_exact)))],
          label='Minimum',
          color='gray', linestyle='--', zorder=-1)
 axs.legend()
 change_label_fontsize(axs, LABELSIZE)
-fig.savefig('./figures/tfim_ps_comparison.pdf')
+fig.savefig('./figures/tfim_su4_linesearch_comparison.pdf')
 
 omegas = []
-for uni in unitaries:
+if not os.path.exists('./data/tfim_su4'):
+    os.makedirs('./data/tfim_su4')
+
+for i, uni in enumerate(unitaries):
+    np.save(f'./data/tfim_su4/uni_{i}', uni)
     omegas.append(get_all_su_n_directions(uni, observables, nqubits, device))
 
-stepstotal = len([om['XXXX'] for om in omegas])
-omegas_length_m = {0: np.zeros(stepstotal), 1: np.zeros(stepstotal), 2: np.zeros(stepstotal),
-                   3: np.zeros(stepstotal)}
+fig1, ax = plt.subplots(1, 1)
+fig1.set_size_inches(8, 8)
+cmap = plt.get_cmap('Reds')
+ax.plot(costs_exact, label=r'Lie $SU(2^n)$ Stoch.', color=cmap(0.3), zorder=-1)
+# axs.plot(costs_exact_unp, label=r'Lie $SU(2^n)$', color=cmap(0.2), zorder=-1)
+ax.plot(range(len(costs_exact)), [np.min(eigvals) for _ in range(len(costs_exact))],
+        label='Min.',
+        color='gray', linestyle='--', zorder=-1)
 
-for k in omegas[0].keys():
-    if k.count('I') == 3:
-        omegas_length_m[3] += np.abs([om[k] for om in omegas])
-    if k.count('I') == 2:
-        omegas_length_m[2] += np.abs([om[k] for om in omegas])
-    if k.count('I') == 1:
-        omegas_length_m[1] += np.abs([om[k] for om in omegas])
-    if k.count('I') == 0:
-        omegas_length_m[0] += np.abs([om[k] for om in omegas])
-
-fig2, ax2 = plt.subplots(1, 1)
-fig2.set_size_inches(6, 6)
-ax2.plot([0 for _ in range(len(omegas_length_m[0]))], label='Min.', color='Black', linestyle='--')
-
-cmap = plt.get_cmap('Set1')
-for i in range(4):
-    ax2.plot(omegas_length_m[i], label=rf'SU$({2 ** (4 - i)})$', color=cmap((i + 1) / 5),
-             linewidth=LINEWIDTH)
-    ax2.set_xlabel('Step')
-    ax2.set_ylabel(r'$\sum_i |\omega_i|$')
-ax2.legend()
-change_label_fontsize(ax2, LABELSIZE)
-fig2.tight_layout()
-fig2.savefig('./figures' + f'/stochastic_su16_abs_optimizer_ps_comp.pdf')
+fig, axs = plot_su16_directions(nqubits, unitaries, observables, device)
+fig.savefig('./figures' + f'/su4_linesearch_optimizer_tfim_{nqubits}.pdf')
 plt.show()

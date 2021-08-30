@@ -10,7 +10,7 @@ np.set_printoptions(precision=3)
 
 plt.rc('font', family='serif')
 
-nqubits = 8
+nqubits = 4
 dev = qml.device('default.qubit', wires=nqubits)
 eta = 1.0
 
