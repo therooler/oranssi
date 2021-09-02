@@ -124,29 +124,44 @@ def get_ops_from_qnode(circuit, params: List, device: qml.Device) -> Tuple[
 
 
 def get_hamiltonian_matrix(nqubits, observables, coeffs=None):
+    """
+    Return the matrix constructed from a list of PennyLane observables
+
+    Args:
+        nqubits: Integer number of qubits.
+        observables: List of Pennylane observables.
+        coeffs: List of float coefficients in front of the operators in the Hamiltonian
+
+    Returns:
+        Matrix corresponding to the Hamiltonian
+
+    """
     hamiltonian = np.zeros((2 ** nqubits, 2 ** nqubits), dtype=complex)
-    for o in observables:
-        hamiltonian += get_full_operator(o.matrix, o.wires, nqubits)
+    if coeffs is None:
+        coeffs = np.ones(len(observables))
+    for i, o in enumerate(observables):
+        hamiltonian += coeffs[i] * get_full_operator(o.matrix, o.wires, nqubits)
     return hamiltonian
 
 
-def get_all_su_n_directions(unitary, observables, nqubits, dev):
+def get_all_su_n_directions(unitary, observables, device):
     """
     Get all SU(2^N) directions in a dictionary where the keys are Pauli words
 
     Args:
-        unitary:
-        observables:
-        nqubits:
-        dev:
+        unitary: Matrix corresponding to a unitary matrix
+        observables: List of PennyLane observables.
+        device: PennyLane device.
 
     Returns:
+        Dictionary containing the directions and corresponding SU(2^N) directions.
 
     """
+    nqubits = len(device.wires)
     observables_full = [get_full_operator(obs.matrix, obs.wires, nqubits) for obs in
                         observables]
     paulis, names = get_su_n_operators(2 ** nqubits, identity=True, return_names=True)
-    circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, dev)
+    circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
     phi = circuit_state_from_unitary_qnode(unitary=unitary)[:, np.newaxis]
     omegas = {}
     for p, n in zip(paulis, names):
@@ -161,13 +176,13 @@ def get_commuting_set(edge_list):
     Find a set of non-overlapping bond given a set of edges
 
     Args:
-        edge_list:
+        edge_list: List of edges.
 
     Returns:
-
+        List of colored edges.
     """
     unrolled_edges = [item for sublist in edge_list for item in sublist]
-    if len(unrolled_edges)==len(set(unrolled_edges)):
+    if len(unrolled_edges) == len(set(unrolled_edges)):
         return edge_list
     else:
         g = nx.from_edgelist(edge_list)

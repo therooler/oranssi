@@ -62,6 +62,18 @@ def circuit_3():
     return circuit, device, param_shape
 
 @pytest.fixture
+def circuit_4():
+    device = qml.device('default.qubit', wires=2)
+
+    def circuit(params, **kwargs):
+        qml.Hadamard(wires=0)
+        qml.Hadamard(wires=1)
+        return qml.state()
+
+    param_shape = (0,)
+    return circuit, device, param_shape
+
+@pytest.fixture
 def circuit_1_bad_return_types(request):
     if request.param == 'float':
         def circuit():
