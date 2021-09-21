@@ -453,6 +453,7 @@ class SquaredLieAlgebraLayer(LieLayer):
                                      enumerate(filtered_edges)]
         else:
             k_max = max(omegas, key=omegas.get)
+            print(k_max)
             self.current_pauli = k_max
             self.previous_pauli = k_max
             circuit_unitary, eta = rotosolve(self.lastate.full_paulis[self.current_pauli],
@@ -543,6 +544,7 @@ class AdaptVQELayer(LieLayer):
                         [omegas[(direction, i, i + 1)] for i in range(1, self.nqubits - 1, 2)]) + \
                                                        omegas[(direction, 0, self.nqubits - 1)]
         k_max = max(layer_omegas, key=layer_omegas.get)
+        print(k_max)
         self.layers.append(k_max)
         self.previous_direction = k_max[0]
         single_layer = {'X': qml.RX, 'Y': qml.RY, 'Z': qml.RZ}
@@ -595,8 +597,88 @@ class AdaptVQELayer(LieLayer):
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
 
-
+ZassenhausLayer
 class SU8_AlgebraLayer(LieLayer):
+    def __init__(self, device, observables: List, **kwargs):
+        """
+        Class that applies a Riemannian optimization step on a SU(2) or SU(4) and SU(8) local manifold.
+
+        Uses the matrix exponential to calculate the exact operator of the commutator.
+        Trotterization applies only on the level of observables, NOT on the level of individual SU(p) terms.
+
+        Args:
+            state_qnode: QNode of a circuit that takes a unitary and returns a state.
+            observables: List of single qubit Pauli observables.
+            nqubits: The number of qubits in the circuit.
+            directions: List of strings containing the allowed directions.
+            **kwargs: Additional keyword arguments are
+                - eta: the stepsize
+                - unitary_error_check: Boolean that flags whether to check if the resulting unitary is a valid
+                unitary operator.
+                -
+        """
+        self.nqubits = len(device.wires)
+        super().__init__(device, observables, self.nqubits)
+
+        self.eta = kwargs.get('eta', 0.1)
+        assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
+            f'`eta` must be an float between 0 and 1, received {self.eta}'
+        self.eta = kwargs.get('eta', 0.1)
+        assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
+            f'`eta` must be an float between 0 and 1, received {self.eta}'
+        assert self.nqubits >= 3, '`nqubits` must be larger than 3'
+        self.lastate = AlgebraSU8(self.nqubits,
+                                  add_su2=kwargs.get('add_su2', True),
+                                  add_su4=kwargs.get('add_su4', True))
+        self.observables = observables
+        self.observables_full = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
+                                 observables]
+        self.unitary_error_check = kwargs.get('unitary_error_check', False)
+        assert isinstance(self.unitary_error_check,
+                          bool), f'`unitary_error_check` must be a boolean, ' \
+                                 f'received {type(self.unitary_error_check)}'
+        self.trotterize = kwargs.get('trotterize', False)
+        assert isinstance(self.trotterize, bool), f'`trotterize` must be a boolean, ' \
+                                                  f'received {type(self.trotterize)}'
+        # initialize
+        self.current_pauli, self.previous_pauli = None, ('Null', 0)
+        self.lastate.get_all_directions_and_qubits()
+        self.dev = qml.device('default.qubit', wires=self.nqubits)
+        self.layers = []
+
+    def __call__(self, circuit_unitary, *args, **kwargs):
+        phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
+        omegas = {}
+        for k, pauli in self.lastate.full_paulis.items():
+            omegas[k] = 0
+            for oi, obs in enumerate(self.observables_full):
+                omegas[k] += float((phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+            omegas[k] = abs(omegas[k])
+
+        k_max = max(omegas, key=omegas.get)
+
+        # select arbitrary direction from among them
+        self.current_pauli = k_max
+        self.previous_pauli = k_max
+        circuit_unitary, eta = rotosolve(self.lastate.full_paulis[self.current_pauli],
+                                         self.observables, self.obs_qnode, circuit_unitary,
+                                         self.nqubits)
+
+        return circuit_unitary
+
+    def __repr__(self):
+        row_format = "{:^25}|" * 3
+        return "| " + \
+               row_format.format(f'SU(8) Layer SU({2 ** self.nqubits})', 'NaN',
+                                 self.trotterize) + " directions -> " + ", ".join(
+            self.lastate.directions)
+
+
+
+    def get_lie_algebra_directions_strings(self):
+        return self.lastate.directions
+
+class ZassenhausLayer(LieLayer):
     def __init__(self, device, observables: List, **kwargs):
         """
         Class that applies a Riemannian optimization step on a SU(2) or SU(4) and SU(8) local manifold.

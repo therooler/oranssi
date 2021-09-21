@@ -140,7 +140,7 @@ def plot_su16_directions_separate(nqubits:int, unitaries, observables, device):
 def plot_su16_directions(nqubits:int, unitaries, observables, device):
     omegas = []
     for uni in unitaries:
-        omegas.append(get_all_su_n_directions(uni, observables, nqubits, device))
+        omegas.append(get_all_su_n_directions(uni, observables, device))
 
     fig, axs = plt.subplots(1, 1)
     fig.set_size_inches(6, 6)

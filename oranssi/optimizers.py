@@ -346,7 +346,7 @@ def approximate_lie_optimizer(circuit, params: List, observables: List, device: 
             cost_exact[step + 1] += circuit_observable_from_unitary_qnode(
                 unitary=circuit_unitary,
                 observable=o)
-
+        print(f"Step {step} - energy {cost_exact[-1]}")
         # get returnables
         if return_state:
             states.append(circuit_state_from_unitary_qnode(unitary=circuit_unitary))
