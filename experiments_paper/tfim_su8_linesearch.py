@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import pennylane as qml
-from oranssi.optimizers import su8_lie_optimizer
+from oranssi.optimizers import approximate_lie_optimizer
+from oranssi.opt_tools import SU8_AlgebraLayer
 import os
 from oranssi.circuit_tools import get_all_su_n_directions, get_hamiltonian_matrix
 import numpy as np
@@ -34,11 +35,12 @@ H = get_hamiltonian_matrix(nqubits, observables)
 eigvals = np.linalg.eigvalsh(H)
 print(f'Spectrum: {eigvals}')
 params = []
-costs_exact, unitaries = su8_lie_optimizer(circuit, params, observables,
-                                           dev, eta=eta,
-                                           return_unitary=True,
-                                           nsteps=30, escape_tol=1e-5,
-                                           add_su2=True, add_su4=True)
+costs_exact, unitaries = approximate_lie_optimizer(circuit, params, observables, dev,
+                                                   layers=[SU8_AlgebraLayer(dev, observables, add_su2=True, add_su4=True)],
+                                                   eta=eta,
+                                                   return_unitary=True,
+                                                   nsteps=30, escape_tol=1e-5,
+                                                  )
 if not os.path.exists('./data/tfim_su8'):
     os.makedirs('./data/tfim_su8')
 

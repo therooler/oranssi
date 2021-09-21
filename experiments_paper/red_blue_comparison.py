@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import pennylane as qml
-import copy
+
 from oranssi.plot_utils import plot_bloch_sphere_2d, spherical_to_state, state_to_spherical, \
-    change_label_fontsize, LABELSIZE, MARKERSIZE, LINEWIDTH, reds, blues
+    change_label_fontsize, LABELSIZE, MARKERSIZE, LINEWIDTH
 from oranssi.utils import get_su_2_operators, save_path_creator
 from oranssi.optimizers import exact_lie_optimizer, parameter_shift_optimizer
 

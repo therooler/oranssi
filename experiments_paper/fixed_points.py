@@ -33,7 +33,7 @@ rho_0[1, 0] = 1.0
 for i, r in enumerate(zip(*rr)):
     U, uni_check = unitary(np.array(r))
     if uni_check:
-        directions = get_all_su_n_directions(U, observables, nqubits, dev)
+        directions = get_all_su_n_directions(U, observables, dev)
         gradients[i, 0] = directions['X']
         gradients[i, 1] = directions['Y']
         gradients[i, 2] = directions['Z']

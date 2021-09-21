@@ -1,11 +1,9 @@
 import matplotlib.pyplot as plt
 import pennylane as qml
-from oranssi.optimizers import exact_lie_optimizer, local_su_2_lie_optimizer, \
-    local_su_4_lie_optimizer, parameter_shift_optimizer
+from oranssi.optimizers import exact_lie_optimizer
 import numpy as np
 from oranssi.utils import get_su_2_operators
 from oranssi.plot_utils import change_label_fontsize, LABELSIZE, MARKERSIZE, LINEWIDTH
-from oranssi.circuit_tools import get_all_su_n_directions
 
 np.set_printoptions(precision=3)
 
@@ -30,12 +28,6 @@ def two_observables_2_qubits():
         # PERTURBATION
         qml.RY(params[0], wires=0)
 
-        # qml.CNOT(wires=[0, 1])
-        # qml.PauliZ(wires=1)
-        # qml.RY(np.pi, wires=0)
-        # qml.RY(-np.pi, wires=1)
-        # qml.RZ(params[1], wires=0)
-        # qml.RZ(params[1], wires=1)
         return qml.state()
 
     observables = [qml.PauliX(1), qml.PauliX(0),qml.PauliY(0)]

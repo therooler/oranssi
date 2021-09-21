@@ -1,8 +1,8 @@
 import matplotlib.pyplot as plt
 import pennylane as qml
 from oranssi.optimizers import exact_lie_optimizer, parameter_shift_optimizer
-from oranssi.plot_utils import LABELSIZE,LINEWIDTH, change_label_fontsize
-
+from oranssi.plot_utils import LABELSIZE,MARKERSIZE,LINEWIDTH, change_label_fontsize
+from oranssi.opt_tools import ZassenhausLayer
 def two_observables_2_qubits_parameter_shift():
     nqubits = 2
     dev = qml.device('default.qubit', wires=nqubits)

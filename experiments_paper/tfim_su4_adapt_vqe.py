@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import pennylane as qml
-from oranssi.optimizers import adaptive_vqe_su_lie_optimizer
-
+from oranssi.optimizers import approximate_lie_optimizer
+from oranssi.opt_tools import AdaptVQELayer
 from oranssi.circuit_tools import get_all_su_n_directions, get_hamiltonian_matrix
 import numpy as np
 from oranssi.plot_utils import change_label_fontsize, LINEWIDTH, LABELSIZE, MARKERSIZE, \
@@ -32,13 +32,14 @@ def tfim_qubits():
     eigvals = np.linalg.eigvalsh(H)
     print(f'Spectrum: {eigvals}')
     params = []
-    costs_exact, unitary = adaptive_vqe_su_lie_optimizer(circuit, params, observables,
-                                                         dev, eta=eta,
+    costs_exact, unitary = approximate_lie_optimizer(circuit, params, observables,
+                                                         dev, layers=[AdaptVQELayer(dev, observables)],
+                                                     eta=eta,
                                                          return_unitary=True,
                                                          nsteps=15, escape_tol=1e-5)
     omegas = []
     for uni in unitary:
-        omegas.append(get_all_su_n_directions(uni, observables, nqubits, dev))
+        omegas.append(get_all_su_n_directions(uni, observables, dev))
         print(omegas[-1])
 
     fig1, ax = plt.subplots(1, 1)

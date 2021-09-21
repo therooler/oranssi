@@ -1,8 +1,9 @@
 import pennylane as qml
-from oranssi.optimizers import parameter_shift_optimizer, local_custom_su_lie_optimizer, \
-    local_su_4_lie_optimizer
-from oranssi.plot_utils import change_label_fontsize, LABELSIZE, LINEWIDTH, reds, blues, plot_su16_directions
+from oranssi.optimizers import parameter_shift_optimizer, approximate_lie_optimizer
+from oranssi.plot_utils import change_label_fontsize, LABELSIZE, LINEWIDTH, reds, blues, \
+    plot_su16_directions
 from oranssi.circuit_tools import get_all_su_n_directions, get_hamiltonian_matrix
+from oranssi.opt_tools import SquaredLieAlgebraLayer
 import matplotlib.pyplot as plt
 import numpy as np
 import os
@@ -45,14 +46,15 @@ def circuit(params, **kwargs):
         qml.Hadamard(wires=n)
 
     return qml.state()
+
+
 H = get_hamiltonian_matrix(nqubits, observables)
 eigvals = np.linalg.eigvalsh(H)
 
-costs_exact, unitaries = local_custom_su_lie_optimizer(circuit, params=init_params, layer_pattern=[(2, 0)],
-                                                observables=observables,
-                                                device=device, eta=.1, nsteps=150,
-                                                tol=1e-6, trotterize=True,
-                                                return_unitaries=True)
+costs_exact, unitaries = approximate_lie_optimizer(circuit, params=init_params, layers=[SquaredLieAlgebraLayer(device, observables)],
+                                                          observables=observables,
+                                                          device=device, eta=.1, nsteps=50,
+                                                          tol=1e-6, return_unitary=True)
 
 fig, axs = plt.subplots(1, 1)
 fig.set_size_inches(6, 6)
@@ -74,13 +76,13 @@ if not os.path.exists('./data/tfim_su4'):
 
 for i, uni in enumerate(unitaries):
     np.save(f'./data/tfim_su4/uni_{i}', uni)
-    omegas.append(get_all_su_n_directions(uni, observables, nqubits, device))
+    omegas.append(get_all_su_n_directions(uni, observables, device))
 
 fig1, ax = plt.subplots(1, 1)
 fig1.set_size_inches(8, 8)
 cmap = plt.get_cmap('Reds')
+
 ax.plot(costs_exact, label=r'Lie $SU(2^n)$ Stoch.', color=cmap(0.3), zorder=-1)
-# axs.plot(costs_exact_unp, label=r'Lie $SU(2^n)$', color=cmap(0.2), zorder=-1)
 ax.plot(range(len(costs_exact)), [np.min(eigvals) for _ in range(len(costs_exact))],
         label='Min.',
         color='gray', linestyle='--', zorder=-1)
