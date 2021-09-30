@@ -293,7 +293,9 @@ def approximate_lie_optimizer(circuit, params: List, observables: List, device: 
     return_perturbations = kwargs.get('return_perturbations', False)
     assert (isinstance(return_perturbations, bool)), \
         f'`return_perturbations` must be a boolean, received {return_perturbations}'
-
+    return_zassenhaus = kwargs.get('return_zassenhaus', False)
+    assert (isinstance(return_zassenhaus, bool)), \
+        f'`return_zassenhaus` must be a boolean, received {return_zassenhaus}'
     lie_layers = it.cycle(layers)
 
     # get circuit as numpy array
@@ -308,6 +310,7 @@ def approximate_lie_optimizer(circuit, params: List, observables: List, device: 
     omegas = []
     unitaries = []
     perturbations = []
+    zassenhaus = []
 
     # Initialize qnodes
     circuit_state_from_unitary_qnode = qml.QNode(circuit_state_from_unitary, device)
@@ -336,6 +339,8 @@ def approximate_lie_optimizer(circuit, params: List, observables: List, device: 
     for step in range(nsteps_optimizer):
         cost_exact.append(0)
         layer = next(lie_layers)
+        if return_zassenhaus:
+            zassenhaus.append(layer.su_state)
         if isinstance(layer, AdaptVQELayer):
             circuit_unitary, params = layer(circuit_unitary, optimizer=parameter_shift_optimizer,
                                             params=params, **kwargs)
@@ -374,9 +379,9 @@ def approximate_lie_optimizer(circuit, params: List, observables: List, device: 
                         f'Cost difference between steps < {tol}, stopping early at step {step}...')
                     break
     print(f"Final cost = {cost_exact[-1]}")
-    returnables = [cost_exact, states, np.array(omegas), unitaries, gates, perturbations]
+    returnables = [cost_exact, states, np.array(omegas), unitaries, gates, perturbations,zassenhaus]
     boolean_returnables = [True, return_state, return_omegas, return_unitary, return_gates,
-                           return_perturbations]
+                           return_perturbations, return_zassenhaus]
     if sum(boolean_returnables[1:]) < 1:
         return cost_exact
     else:

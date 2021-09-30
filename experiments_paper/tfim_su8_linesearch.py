@@ -47,7 +47,7 @@ if not os.path.exists('./data/tfim_su8'):
 omegas = []
 for i, uni in enumerate(unitaries):
     np.save(f'./data/tfim_su8/uni_{i}', uni)
-    omegas.append(get_all_su_n_directions(uni, observables, nqubits, dev))
+    omegas.append(get_all_su_n_directions(uni, observables, dev))
 
 fig1, ax = plt.subplots(1, 1)
 fig1.set_size_inches(8, 8)

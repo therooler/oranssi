@@ -10,6 +10,8 @@ import itertools as it
 from oranssi.circuit_tools import get_full_operator, get_commuting_set, get_ops_from_qnode, \
     circuit_state_from_unitary, circuit_observable_from_unitary, get_all_su_n_directions
 from oranssi.utils import get_su_2_operators, get_su_4_operators, get_su_n_operators
+from oranssi.pauli import Pauli, PauliMonomial, pauli_idx_int2str_map
+from scipy.optimize import minimize
 
 
 class LieLayer(object):
@@ -93,6 +95,7 @@ class LieLayer(object):
             Dictionary containing the directions and corresponding SU(2^N) directions.
         """
         return get_all_su_n_directions(circuit_unitary, self.observables, self.device)
+
 
 class LocalLieAlgebraLayer(LieLayer):
     def __init__(self, device, observables: List, locality: int, **kwargs):
@@ -204,6 +207,7 @@ class LocalLieAlgebraLayer(LieLayer):
     def get_lie_algebra_directions_strings(self):
         return self.directions
 
+
 class CustomDirectionLieAlgebraLayer(LieLayer):
     def __init__(self, device, observables: List, directions: List[str], **kwargs):
         """
@@ -276,7 +280,8 @@ class CustomDirectionLieAlgebraLayer(LieLayer):
                 omegas = []
                 for k, pauli in self.lastate.full_paulis.items():
                     omegas.append(phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi)
-                self.op = sum(omegas[i] * pauli for i, pauli in enumerate(self.lastate.full_paulis.values()))
+                self.op = sum(
+                    omegas[i] * pauli for i, pauli in enumerate(self.lastate.full_paulis.values()))
                 U_riemann_approx = ssla.expm(-self.eta / 2 ** self.nqubits * self.op)
                 if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx)):
                     U_riemann_approx = self._project_onto_unitary(U_riemann_approx)
@@ -360,8 +365,6 @@ class StochasticLieAlgebraLayer(LieLayer):
                row_format.format(f'Stoch. Algebra Layer SU({2 ** self.nqubits})', 'NaN',
                                  self.trotterize) + " directions -> " + ", ".join(
             self.lastate.directions)
-
-
 
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
@@ -458,7 +461,7 @@ class SquaredLieAlgebraLayer(LieLayer):
             self.previous_pauli = k_max
             circuit_unitary, eta = rotosolve(self.lastate.full_paulis[self.current_pauli],
                                              self.observables, self.obs_qnode, circuit_unitary,
-                                             self.nqubits)
+                                             len(k_max[0]))
 
             return circuit_unitary
 
@@ -468,8 +471,6 @@ class SquaredLieAlgebraLayer(LieLayer):
                row_format.format(f'Stoch. Algebra Layer SU({2 ** self.nqubits})', 'NaN',
                                  self.trotterize) + " directions -> " + ", ".join(
             self.lastate.directions)
-
-
 
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
@@ -592,12 +593,10 @@ class AdaptVQELayer(LieLayer):
                                  self.trotterize) + " directions -> " + ", ".join(
             self.lastate.directions)
 
-
-
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
 
-ZassenhausLayer
+
 class SU8_AlgebraLayer(LieLayer):
     def __init__(self, device, observables: List, **kwargs):
         """
@@ -662,7 +661,7 @@ class SU8_AlgebraLayer(LieLayer):
         self.previous_pauli = k_max
         circuit_unitary, eta = rotosolve(self.lastate.full_paulis[self.current_pauli],
                                          self.observables, self.obs_qnode, circuit_unitary,
-                                         self.nqubits)
+                                         len(k_max[0]))
 
         return circuit_unitary
 
@@ -673,10 +672,9 @@ class SU8_AlgebraLayer(LieLayer):
                                  self.trotterize) + " directions -> " + ", ".join(
             self.lastate.directions)
 
-
-
     def get_lie_algebra_directions_strings(self):
         return self.lastate.directions
+
 
 class ZassenhausLayer(LieLayer):
     def __init__(self, device, observables: List, **kwargs):
@@ -707,9 +705,12 @@ class ZassenhausLayer(LieLayer):
         assert (isinstance(self.eta, float) & (0. <= self.eta <= 1.)), \
             f'`eta` must be an float between 0 and 1, received {self.eta}'
         assert self.nqubits >= 3, '`nqubits` must be larger than 3'
-        self.lastate = AlgebraSU8(self.nqubits,
-                                  add_su2=kwargs.get('add_su2', True),
-                                  add_su4=kwargs.get('add_su4', True))
+        self.lastates = [AlgebraSU2(self.nqubits),
+                         AlgebraSU4(self.nqubits,
+                                    add_su2=kwargs.get('add_su2', False)),
+                         AlgebraSU8(self.nqubits,
+                                    add_su2=kwargs.get('add_su2', False),
+                                    add_su4=kwargs.get('add_su4', False))]
         self.observables = observables
         self.observables_full = [get_full_operator(obs.matrix, obs.wires, self.nqubits) for obs in
                                  observables]
@@ -722,100 +723,319 @@ class ZassenhausLayer(LieLayer):
                                                   f'received {type(self.trotterize)}'
         # initialize
         self.current_pauli, self.previous_pauli = None, ('Null', 0)
-        self.lastate.get_all_directions_and_qubits()
+        for lastate in self.lastates:
+            lastate.get_all_directions_and_qubits()
         self.dev = qml.device('default.qubit', wires=self.nqubits)
-        self.layers = []
+        self.ratio = kwargs.get('ratio', (1, 1))
+        # self.layers = []
+        self.counter = 0
+        self.su_state = 'su4'
+        # self.lastate_idx = 0
+        # self.previous_eta = 0
+        # self.palgebra = {('X', 'X'): (1, 'I'), ('X', 'Y'): (1, 'Z'), ('X', 'Z'): (-1, 'Y'),
+        #                  ('Y', 'X'): (-1, 'Z'), ('Y', 'Y'): (1, 'I'), ('Y', 'Z'): (1, 'X'),
+        #                  ('Z', 'X'): (1, 'Y'), ('Z', 'Y'): (-1, 'X'), ('Z', 'Z'): (1, 'I'), }
 
     def __call__(self, circuit_unitary, *args, **kwargs):
         phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
-        omegas = {}
-        for k, pauli in self.lastate.full_paulis.items():
-            omegas[k] = 0
-            for oi, obs in enumerate(self.observables_full):
-                omegas[k] += float((phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
-            omegas[k] = abs(omegas[k])
 
-        k_max = max(omegas, key=omegas.get)
+        if self.su_state == 'su4':
+            print('state: ', self.su_state)
+            omegas = {}
+            for k, pauli in self.lastates[1].full_paulis.items():
+                omegas[k] = 0
+                for oi, obs in enumerate(self.observables_full):
+                    omegas[k] += float(
+                        (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+                omegas[k] = abs(omegas[k])
 
-        # select arbitrary direction from among them
-        self.current_pauli = k_max
-        self.previous_pauli = k_max
-        circuit_unitary, eta = rotosolve(self.lastate.full_paulis[self.current_pauli],
-                                         self.observables, self.obs_qnode, circuit_unitary,
-                                         self.nqubits)
+            k_max = max(omegas, key=omegas.get)
+            # omegas_sorted = sorted(omegas, key=omegas.get)
+            # probs = np.array([omegas[om] for om in omegas_sorted])
+            # probs /= np.sum(probs)
+            # k_max = omegas_sorted[np.random.choice(list(range(len(omegas_sorted))), p=probs)]
+            self.current_pauli = k_max
+            circuit_unitary, eta = rotosolve(
+                self.lastates[1].full_paulis[self.current_pauli],
+                self.observables, self.obs_qnode, circuit_unitary,
+                len(k_max[0]))
+            self.previous_eta = eta
+            self.counter += 1
+            if self.counter >= self.ratio[0]:
+                self.counter = 0
+                self.su_state = 'su8'
+        else:
+            print('state: ', self.su_state)
+            omegas_su8 = {}
+            omegas_su8_k = {}
+
+            for k, pauli in self.lastates[1].full_paulis.items():
+                if sum(ki in self.current_pauli[1:] for ki in k[1:]) == 1:
+                    p_a = PauliMonomial([Pauli(loc, pauli) for pauli, loc in
+                                         zip(self.current_pauli[0], self.current_pauli[1:])])
+                    p_b = PauliMonomial([Pauli(loc, pauli) for pauli, loc in zip(k[0], k[1:])])
+                    p_ab = p_a.commutator(p_b)
+                    AB = (
+                        ''.join(pauli_idx_int2str_map[p.gamma] for p in p_ab),
+                        *[p.alpha for p in p_ab])
+                else:
+                    continue
+                if 'I' in AB[0]:
+                    continue
+                omegas_su8[AB] = 0
+                pauli = self.lastates[2].full_paulis[AB]
+                for oi, obs in enumerate(self.observables_full):
+                    omegas_su8[AB] += float(
+                        (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+                omegas_su8[AB] = abs(omegas_su8[AB])
+                omegas_su8_k[AB] = copy.copy(k)
+            print(omegas_su8)
+            k_max = max(omegas_su8, key=omegas_su8.get)
+            B = omegas_su8_k[k_max]
+            circuit_unitary, eta = rotosolve(
+                self.lastates[1].full_paulis[B],
+                self.observables, self.obs_qnode, circuit_unitary,
+                len(k_max[0]))
+            self.counter += 1
+            if self.counter >= self.ratio[1]:
+                self.counter = 0
+                self.su_state = 'su4'
 
         return circuit_unitary
+
+    # def __call__(self, circuit_unitary, *args, **kwargs):
+    #     phi = self.state_qnode(unitary=circuit_unitary)[:, np.newaxis]
+    #     if self.su_state != 'su8':
+    #         if self.su_state == 'su2':
+    #             self.counter += 1
+    #
+    #             if self.counter > self.nqubits:
+    #                 self.counter = 1
+    #                 self.su_state = 'su4'
+    #             self.lastate_idx = 0
+    #             print(self.su_state, self.counter)
+    #
+    #         elif self.su_state == 'su4':
+    #             self.counter += 1
+    #             if self.counter > self.nqubits:
+    #                 self.counter = 1
+    #                 self.su_state = 'su8'
+    #             self.lastate_idx = 1
+    #             print(self.su_state, self.counter)
+    #         omegas = {}
+    #         for k, pauli in self.lastates[self.lastate_idx].full_paulis.items():
+    #             omegas[k] = 0
+    #             for oi, obs in enumerate(self.observables_full):
+    #                 omegas[k] += float(
+    #                     (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+    #             omegas[k] = abs(omegas[k])
+    #         k_max = max(omegas, key=omegas.get)
+    #         self.current_pauli = k_max
+    #         circuit_unitary, eta = rotosolve(
+    #             self.lastates[self.lastate_idx].full_paulis[self.current_pauli],
+    #             self.observables, self.obs_qnode, circuit_unitary,
+    #             len(k_max[0]))
+    #         self.previous_eta = eta
+    #     else:
+    #         self.lastate_idx = 1
+    #
+    #         print(self.su_state, self.counter)
+    #         omegas = {}
+    #         omegas_su8 = {}
+    #         omegas_su8_k = {}
+    #         omegas_su8_abs = {}
+    #         su_8_signs = {}
+    #         pauli = self.lastates[1].full_paulis[self.current_pauli]
+    #         omegas[self.current_pauli] = 0
+    #         for oi, obs in enumerate(self.observables_full):
+    #             omegas[self.current_pauli] += float(
+    #                 (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+    #
+    #         for k, pauli in self.lastates[self.lastate_idx].full_paulis.items():
+    #             if sum(ki in self.current_pauli[1:] for ki in k[1:]) == 1:
+    #                 p_a = PauliMonomial([Pauli(loc, pauli) for pauli, loc in
+    #                                      zip(self.current_pauli[0], self.current_pauli[1:])])
+    #                 p_b = PauliMonomial([Pauli(loc, pauli) for pauli, loc in zip(k[0], k[1:])])
+    #                 p_ab = p_a.commutator(p_b)
+    #                 AB = (
+    #                 ''.join(pauli_idx_int2str_map[p.gamma] for p in p_ab), *[p.alpha for p in p_ab])
+    #             else:
+    #                 continue
+    #             if 'I' in AB[0]:
+    #                 continue
+    #             omegas[k] = 0
+    #             for oi, obs in enumerate(self.observables_full):
+    #                 omegas[k] += float((phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+    #             omegas_su8[AB] = 0
+    #             for oi, obs in enumerate(self.observables_full):
+    #                 omegas_su8[AB]+= float((phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
+    #             omegas_su8_abs[AB] = abs(omegas_su8[AB])
+    #             omegas_su8_k[AB] = copy.copy(k)
+    #             su_8_signs[AB] = p_ab.coeff
+    #         k_max = max(omegas_su8_abs, key=omegas_su8_abs.get)
+    #         omega_A = self.previous_eta/( self.eta / 2 ** self.nqubits )
+    #         omega_AB = omegas_su8[k_max]
+    #         omega_B = (-2 * omega_AB * su_8_signs[k_max]) / omega_A
+    #         B = omegas_su8_k[k_max]
+    #         print(omega_A, self.current_pauli)
+    #         print(omega_B, B)
+    #         print(omega_AB, k_max)
+    #         print(k_max)
+    #         print(omegas_su8)
+    #         print(omegas)
+    #         #
+    #         # omega_AB = 0
+    #         # pauli = self.lastates[self.lastate_idx].full_paulis[k_max]
+    #         # for oi, obs in enumerate(self.observables_full):
+    #         #     omega_AB += (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0]
+    #         # A = (k_max[0][0] + self.middle_pauli_map[k_max[0][1]][0], k_max[1], k_max[2])
+    #         # B = (self.middle_pauli_map[k_max[0][1]][1] + k_max[0][2], k_max[2], k_max[3])
+    #         # omega_A = 0
+    #         # pauli = self.lastates[1].full_paulis[A]
+    #         # for oi, obs in enumerate(self.observables_full):
+    #         #     omega_A += (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0]
+    #         # omega_B = 0
+    #         # pauli = self.lastates[1].full_paulis[B]
+    #         # for oi, obs in enumerate(self.observables_full):
+    #         #     omega_B += (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0]
+    #         # print(omega_A)
+    #         # print(omega_B)
+    #         # print(omega_AB)
+    #         # result = minimize(lambda a,b: , x0=[0.1, 0.1])
+    #         # def cost_fun(x):
+    #         #     alpha, beta = x
+    #         #     U_riemann_approx_A = ssla.expm(-1j * alpha * self.lastates[1].full_paulis[A])
+    #         #     U_riemann_approx_B = ssla.expm(-1j * beta * self.lastates[1].full_paulis[B])
+    #         #     cost = 0
+    #         #     for o in self.observables_full:
+    #         #         cost += phi.conj().T @ U_riemann_approx_A.T.conj() @ U_riemann_approx_B.T.conj() @ o @ U_riemann_approx_B @ U_riemann_approx_A @ phi
+    #         #     cost = np.real(cost)[0, 0]
+    #         #     print(cost, 'cost')
+    #         #     return cost
+    #         #
+    #         # result = minimize(cost_fun, x0=[0.1, 0.1])
+    #         # alpha, beta = result.x
+    #         # alpha, beta = 0., 0.
+    #         U_riemann_approx_A = ssla.expm(
+    #             - self.eta / 2 ** self.nqubits * omega_B * self.lastates[1].full_paulis[B])
+    #         # if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx_A)):
+    #         #     U_riemann_approx_A = self._project_onto_unitary(U_riemann_approx_A)
+    #         circuit_unitary = U_riemann_approx_A @ circuit_unitary
+    #         # U_riemann_approx_B = ssla.expm(-1j * beta * self.lastates[1].full_paulis[B])
+    #         # if (self.unitary_error_check) and (self._is_unitary(U_riemann_approx_B)):
+    #         #     U_riemann_approx_B = self._project_onto_unitary(U_riemann_approx_B)
+    #         # circuit_unitary = U_riemann_approx_B @ circuit_unitary
+    #         self.counter += 1
+    #         if self.counter > 1:
+    #             self.counter = 1
+    #             self.su_state = 'su2'
+    #     print(k_max)
+    #     print(omegas)
+    #
+    #     return circuit_unitary
 
     def __repr__(self):
         row_format = "{:^25}|" * 3
         return "| " + \
-               row_format.format(f'SU(8) Layer SU({2 ** self.nqubits})', 'NaN',
-                                 self.trotterize) + " directions -> " + ", ".join(
-            self.lastate.directions)
-
-
+               row_format.format(f'Zassenhaus Layer SU({2 ** self.nqubits})', 'NaN',
+                                 self.trotterize) + " directions -> " + "SU(2), SU(4), SU(8) by Zassenhaus "
 
     def get_lie_algebra_directions_strings(self):
-        return self.lastate.directions
+        return [lastate.directions for lastate in self.lastates]
 
-#
-# class SU4_AlgebraLayer():
-#     def __init__(self, nqubits, add_su2: bool = False, periodic: bool = False):
-#         self.nqubits = nqubits
-#         self.add_su2 = add_su2
-#         self.periodic = periodic
-#         if add_su2:
-#             self.paulis = get_su_2_operators(return_names=False) + \
-#                           get_su_4_operators(return_names=False)
-#             self.directions = get_su_2_operators(return_names=True)[1] + \
-#                               get_su_4_operators(return_names=True)[1]
-#         else:
-#             self.paulis = get_su_4_operators(return_names=False)
-#             self.directions = get_su_4_operators(return_names=True)[1]
-#
-#         self.paulis = dict(zip(self.directions, self.paulis))
-#
-#         self.full_paulis = {}
-#
-#     def get_random_direction_and_qubits(self):
-#         raise NotImplementedError
-#
-#     def get_all_directions_and_qubits(self):
-#
-#         for direction in self.directions:
-#             if len(direction) == 2:
-#                 self.add_su4_layers(direction)
-#             elif len(direction) == 1:
-#                 if (direction, 'single') not in self.full_paulis.keys():
-#                     self.full_paulis[(direction, 'single')] = np.eye(2 ** self.nqubits,
-#                                                                      2 ** self.nqubits,
-#                                                                      dtype=complex)
-#                     for i in range(0, self.nqubits):
-#                         self.full_paulis[(direction, 'single')] = get_full_operator(
-#                             self.paulis[direction], (i,), self.nqubits) @ self.full_paulis[
-#                                                                       (direction, 'single')]
-#
-#     def add_su4_layers(self, direction):
-#         if (direction, 'even') not in self.full_paulis.keys():
-#             self.full_paulis[(direction, 'even')] = np.eye(2 ** self.nqubits, 2 ** self.nqubits,
-#                                                            dtype=complex)
-#             for i in range(0, self.nqubits, 2):
-#                 self.full_paulis[(direction, 'even')] = get_full_operator(self.paulis[direction],
-#                                                                           (i, i + 1), self.nqubits) \
-#                                                         @ self.full_paulis[(direction, 'even')]
-#         elif (direction, 'odd') not in self.full_paulis.keys():
-#             self.full_paulis[(direction, 'odd')] = np.eye(2 ** self.nqubits, 2 ** self.nqubits,
-#                                                           dtype=complex)
-#             for i in range(1, self.nqubits, 2):
-#                 self.full_paulis[(direction, 'odd')] = get_full_operator(self.paulis[direction],
-#                                                                          (i, i + 1), self.nqubits) \
-#                                                        @ self.full_paulis[(direction, 'even')]
-#                 print(direction, i, i + 1)
-#
-#             if self.periodic:
-#                 self.full_paulis[(direction, 'odd')] = get_full_operator(self.paulis[direction],
-#                                                                          (-1, 0), self.nqubits) \
-#                                                        @ self.full_paulis[(direction, 'even')]
+
+class AlgebraSU2():
+
+    def __init__(self, nqubits, add_su2: bool = False):
+        """
+        Abstract SU(4) algebra class.
+
+        Args:
+            nqubits: Integer number of qubits.
+            add_su2: Booolean that indicates if we add SU(2)
+        """
+        self.nqubits = nqubits
+        self.add_su2 = add_su2
+        self.paulis, self.directions = get_su_2_operators(return_names=True)
+
+        self.reset_directions()
+
+        self.paulis = dict(zip(self.directions, self.paulis))
+
+        self.directions_left = copy.copy(self.directions)
+        self.qubits_left = np.zeros(self.nqubits, dtype=int)
+        self.full_paulis = {}
+
+        self.FIRST_CALL = True
+
+    def get_random_direction_and_qubits(self):
+        """
+        Get a random SU(4) direction.
+
+        Returns:
+
+        """
+        raise NotImplementedError
+        idx = np.where(self.qubits_left == 0)[0].tolist()
+        # allow SU(4) samples
+        if not idx:
+            self.reset_qubits()
+            idx = np.where(self.qubits_left == 0)[0].tolist()
+        if not self.directions_left:
+            self.reset_directions()
+        if len(idx) > 1:
+            direction = np.random.choice(self.directions_left, size=1)[0]
+            if len(direction) == 1:
+                qubits = np.random.permutation(idx)[:1]
+            else:
+                qubits = np.random.permutation(idx)[:2]
+        else:
+            if any(len(d) == 1 for d in self.directions_left):
+                direction = np.random.choice([d for d in self.directions_left if len(d) == 1],
+                                             size=1)[0]
+            else:
+                self.reset_directions(su2_only=True)
+                direction = np.random.choice([d for d in self.directions_left if len(d) == 1],
+                                             size=1)[0]
+
+            qubits = np.random.permutation(idx)[:1]
+        self.qubits_left[qubits] = 1
+        self.add_pauli(direction, qubits)
+        self.directions_left.remove(direction)
+        return direction, qubits
+
+    def get_all_directions_and_qubits(self):
+        """
+        Construct all
+
+        Returns:
+
+        """
+        idx = np.where(self.qubits_left == 0)[0].tolist()
+        # allow SU(4) samples
+        if not idx:
+            self.reset_qubits()
+            idx = np.where(self.qubits_left == 0)[0].tolist()
+
+        if len(idx) > 1:
+            qubits = [(q,) for q in idx] + list(it.combinations(idx, r=2))
+        else:
+            qubits = [(q,) for q in idx]
+        for direction in self.directions:
+            for q in qubits:
+                if len(q) == len(direction):
+                    self.add_pauli(direction, q)
+
+    def add_pauli(self, direction, qubits):
+        if (direction, *qubits) not in self.full_paulis.keys():
+            self.full_paulis[(direction, *qubits)] = get_full_operator(self.paulis[direction],
+                                                                       qubits, self.nqubits)
+
+    def reset_directions(self):
+        self.directions_left = copy.copy(self.directions)
+
+    def reset_qubits(self):
+        self.qubits_left = np.zeros(self.nqubits, dtype=int)
 
 
 class AlgebraSU4():
@@ -856,6 +1076,7 @@ class AlgebraSU4():
         Returns:
 
         """
+        raise NotImplementedError
         idx = np.where(self.qubits_left == 0)[0].tolist()
         # allow SU(4) samples
         if not idx:
@@ -993,11 +1214,11 @@ def rotosolve(pauli, observables, obs_qnode, circuit_unitary, nqubits):
             unitary=U_riemann_approx @ circuit_unitary,
             observable=o)
     H_m = 0.
-    U_riemann_approx = ssla.expm(-1j * np.pi / 2 * pauli / 2 ** nqubits)
+    U_riemann_approx = ssla.expm(1j * np.pi / 2 * pauli / 2 ** nqubits)
     for o in observables:
         H_m += obs_qnode(
             unitary=U_riemann_approx @ circuit_unitary,
             observable=o)
-    eta = np.arctan2(2 * H_0 - H_p - H_m, H_p - H_m)
+    eta = -np.pi / 2 - np.arctan2(2 * H_0 - H_p - H_m, H_p - H_m)
     U_riemann_approx = ssla.expm(-1j * eta * pauli / 2 ** nqubits)
     return U_riemann_approx @ circuit_unitary, eta
