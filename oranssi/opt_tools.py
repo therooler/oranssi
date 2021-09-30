@@ -754,12 +754,14 @@ class ZassenhausLayer(LieLayer):
             # probs = np.array([omegas[om] for om in omegas_sorted])
             # probs /= np.sum(probs)
             # k_max = omegas_sorted[np.random.choice(list(range(len(omegas_sorted))), p=probs)]
-            self.current_pauli = k_max
+
             circuit_unitary, eta = rotosolve(
-                self.lastates[1].full_paulis[self.current_pauli],
+                self.lastates[1].full_paulis[k_max],
                 self.observables, self.obs_qnode, circuit_unitary,
                 len(k_max[0]))
+            self.current_pauli = k_max
             self.previous_eta = eta
+
             self.counter += 1
             if self.counter >= self.ratio[0]:
                 self.counter = 0
@@ -768,6 +770,7 @@ class ZassenhausLayer(LieLayer):
             print('state: ', self.su_state)
             omegas_su8 = {}
             omegas_su8_k = {}
+            omegas_su8_signs = {}
 
             for k, pauli in self.lastates[1].full_paulis.items():
                 if sum(ki in self.current_pauli[1:] for ki in k[1:]) == 1:
@@ -789,13 +792,30 @@ class ZassenhausLayer(LieLayer):
                         (phi.conj().T @ (pauli @ obs - obs @ pauli) @ phi).imag[0, 0])
                 omegas_su8[AB] = abs(omegas_su8[AB])
                 omegas_su8_k[AB] = copy.copy(k)
+                omegas_su8_signs[AB] = p_ab.coeff.imag
             print(omegas_su8)
             k_max = max(omegas_su8, key=omegas_su8.get)
+
+            # grad = []
+            # pauli = self.lastates[2].full_paulis[k_max]
+            # for i,t in enumerate(np.linspace(0, 2*np.pi,100)):
+            #     U_riemann_approx = ssla.expm(-1j * t * pauli)
+            #     grad.append(0)
+            #     for oi, obs in enumerate(self.observables_full):\
+            #         grad[i] += float(
+            #         (phi.conj().T @ U_riemann_approx.conj().T@(pauli @ obs - obs @ pauli) @ U_riemann_approx@phi).imag[0, 0])
+            # print(grad)
             B = omegas_su8_k[k_max]
+            # eta = np.linspace(0, 2 * np.pi, 100)[np.argmin(grad)]
+            # U_riemann_approx = ssla.expm(-1j * eta * self.lastates[1].full_paulis[B])
+            #
+            self.current_pauli = B
+            # circuit_unitary = U_riemann_approx @ circuit_unitary
             circuit_unitary, eta = rotosolve(
                 self.lastates[1].full_paulis[B],
                 self.observables, self.obs_qnode, circuit_unitary,
                 len(k_max[0]))
+            self.previous_eta = eta
             self.counter += 1
             if self.counter >= self.ratio[1]:
                 self.counter = 0
