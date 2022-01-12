@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from oranssi.utils import get_su_2_operators
+from oranssi.utils import get_su_2_operators, get_su_n_operators
 from oranssi.circuit_tools import get_all_su_n_directions
 
 plt.rc('font', family='serif')
@@ -162,9 +162,95 @@ def plot_su16_directions(nqubits:int, unitaries, observables, device):
     axs.plot([0 for _ in range(len(omegas_length_m[0]))], label='Min.', color='Black',
              linestyle='--')
 
-    cmap = plt.get_cmap('Set1')
+    cmap = plt.get_cmap('PuOr')
     for i in range(4):
         axs.plot(omegas_length_m[i], label=rf'SU$({2 ** (4 - i)})$', color=cmap((i + 1) / 5),
+                 linewidth=LINEWIDTH)
+        axs.set_xlabel('Step')
+        axs.set_ylabel(r'$\sum_i |\omega_i|$')
+    axs.legend()
+    change_label_fontsize(axs, LABELSIZE)
+    return fig, axs
+
+
+def plot_su8_directions_individually(unitaries, observables, device):
+    omegas = []
+    for uni in unitaries:
+        omegas.append(get_all_su_n_directions(uni, observables, device))
+
+    su4_names = []
+    su8_names = []
+    print(su8_names)
+    stepstotal = len([om['XX'] for om in omegas])
+    omegas_length_m = {0: np.zeros(stepstotal), 1: np.zeros(stepstotal),}
+    omegas_su4 = []
+    omegas_su8 = []
+    for k in omegas[0].keys():
+        if k.count('I') == 1:
+            su4_names.append(k)
+            omegas_length_m[1] += np.abs([om[k] for om in omegas])
+            omegas_su4.append([om[k] for om in omegas])
+        if k.count('I') == 0:
+            su8_names.append(k)
+            omegas_length_m[0] += np.abs([om[k] for om in omegas])
+            omegas_su8.append([om[k] for om in omegas])
+    omegas_su4 = np.array(omegas_su4)
+    omegas_su8 = np.array(omegas_su8)
+    fig, axs = plt.subplots(1, 1)
+
+    for i,om in enumerate(omegas_su4):
+        if not np.allclose(om, 0):
+            axs.plot(om, label=''.join(list(su4_names[i])),  linewidth=LINEWIDTH)
+
+    for i,om in enumerate(omegas_su8):
+        if not np.allclose(om,0):
+            axs.plot(om, label=''.join(list(su8_names[i])),  linewidth=LINEWIDTH)
+    axs.legend()
+
+    change_label_fontsize(axs, LABELSIZE)
+    return fig, axs
+
+
+def plot_su8_directions(nqubits:int, unitaries, observables, device):
+    omegas = []
+    for uni in unitaries:
+        omegas.append(get_all_su_n_directions(uni, observables, device))
+
+    su4_names = []
+    su8_names = []
+    print(su8_names)
+    stepstotal = len([om['XX'] for om in omegas])
+    omegas_length_m = {0: np.zeros(stepstotal), 1: np.zeros(stepstotal),}
+    omegas_su4 = []
+    omegas_su8 = []
+    for k in omegas[0].keys():
+        if k.count('I') == 1:
+            su4_names.append(k)
+            omegas_length_m[1] += np.abs([om[k] for om in omegas])
+            omegas_su4.append([om[k] for om in omegas])
+        if k.count('I') == 0:
+            su8_names.append(k)
+            omegas_length_m[0] += np.abs([om[k] for om in omegas])
+            omegas_su8.append([om[k] for om in omegas])
+    omegas_su4 = np.array(omegas_su4)
+    omegas_su8 = np.array(omegas_su8)
+    for i,om in enumerate(omegas_su4):
+        if not np.allclose(om, 0):
+            plt.plot(om, label=''.join(list(su4_names[i])))
+
+    for i,om in enumerate(omegas_su8):
+        if not np.allclose(om,0):
+            plt.plot(om, label=''.join(list(su8_names[i])))
+    plt.legend()
+    plt.show()
+    fig, axs = plt.subplots(1, 1)
+    fig.set_size_inches(6, 6)
+    axs.plot([0 for _ in range(len(omegas_length_m[0]))], label='Min.', color='Black',
+             linestyle='--')
+
+    cmap = plt.get_cmap('Set1')
+    for i in range(2):
+        axs.plot(omegas_length_m[i], label=rf'SU$({2 ** (2 - i)})$', color=cmap((i + 1) / 5),
                  linewidth=LINEWIDTH)
         axs.set_xlabel('Step')
         axs.set_ylabel(r'$\sum_i |\omega_i|$')

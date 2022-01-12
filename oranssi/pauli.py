@@ -1,7 +1,7 @@
 from typing import List, Union
 import copy
 import numpy as np
-
+import sympy as sp
 ### Code to rewrite pauli strings ###
 
 levicevita = lambda i, j, k: (i - j) * (j - k) * (k - i) / 2
@@ -11,13 +11,13 @@ pauli_idx_int2str_map = dict(zip(pauli_idx_str2int_map.values(),
 
 
 class Pauli(object):
-    def __init__(self, alpha: int, gamma: Union[int, str], coeff: Union[float, complex] = 1.0):
+    def __init__(self, alpha: int, gamma: Union[int, str], coeff: Union[float, complex, sp.Symbol] = 1.0):
         assert isinstance(alpha, (int, np.int)), f'alpha must be `int`, received `{type(alpha)}`'
         assert alpha >= 0, f'alpha must be >= 0, found {alpha}'
         self.alpha = alpha
         assert isinstance(gamma, (int, np.integer, str)), f'gamma must be `int` or `str`, received `{type(gamma)}`'
         assert isinstance(coeff, (
-            float, np.float, complex, np.complex)), f'coeff must be `complex` or `float`, received `{type(gamma)}`'
+            float, np.float, complex, np.complex, sp.Symbol, sp.Mul, sp.Pow)), f'coeff must be `complex`, `float` or `sympy.Symbol, received `{type(coeff)}`'
         # Convert internally to integer indices (0,x,y,z)->(0,1,2,3)
         if isinstance(gamma, str):
             assert gamma in pauli_idx_str2int_map.keys(), 'gamma index must be ' \
@@ -31,7 +31,9 @@ class Pauli(object):
             self.gamma = gamma
         # TODO: add support for symbolic coefficients here. Maybe with sympy?
         # For now we cast to numpy for consistency down the road
-        self.coeff = np.complex(coeff)
+        if not isinstance(coeff, (sp.Symbol, sp.Mul, sp.Pow)):
+            self.coeff = np.complex(coeff)
+        else: self.coeff = coeff
 
     def __mul__(self, other):
         # Multiplication means applying the SU(2) commutator [s^a, s^b] = -i lvc_abc s^c + delta_{ab}
@@ -240,6 +242,10 @@ class PauliMonomial(object):
         left_side.coeff = left_side.coeff - right_side.coeff
         return left_side
 
+    def to_oranssi(self):
+
+        return (''.join([pauli_idx_int2str_map[p.gamma] for p in self.monomial if p.gamma!=0]),
+                *[p.alpha for p in self.monomial if p.gamma!=0])
 
 class PauliSum(object):
     def __init__(self, list_of_pauli_monomials: List[PauliMonomial]):

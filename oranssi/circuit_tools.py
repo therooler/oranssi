@@ -24,7 +24,7 @@ def param_shift_comm(rho: np.ndarray, gate) -> np.ndarray:
 
 def get_full_operator(op: np.ndarray, wires: Tuple[int, ...], nqubits: int) -> np.ndarray:
     """
-    Takes a local operator `op` acting on `wires` and promotes it to an operatr on the full unitary space
+    Takes a local operator `op` acting on `wires` and promotes it to an operator on the full unitary space
     C^{2^n x 2^n}.
 
     Args:
@@ -167,7 +167,7 @@ def get_all_su_n_directions(unitary, observables, device):
     for p, n in zip(paulis, names):
         omegas[n] = 0
         for obs in observables_full:
-            omegas[n] += float((phi.conj().T @ (p @ obs - obs @ p) @ phi).imag)
+            omegas[n] += float((phi.conj().T @ (p @ obs - obs @ p) @ phi).imag) / 2**nqubits
     return omegas
 
 

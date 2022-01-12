@@ -5,14 +5,14 @@ import os
 from oranssi.optimizers import approximate_lie_optimizer, parameter_shift_optimizer
 from oranssi.plot_utils import LABELSIZE, MARKERSIZE, LINEWIDTH, change_label_fontsize, \
     get_all_su_n_directions, plot_su16_directions
-from oranssi.opt_tools import ZassenhausLayer
+from oranssi.opt_tools import ZassenhausLayer,ZassenhausLayerV2
 from oranssi.circuit_tools import get_hamiltonian_matrix
 
 
 def two_observables_3_qubits_zassenhaus():
     nqubits = 3
     dev = qml.device('default.qubit', wires=nqubits)
-    eta = 0.5
+    eta = 0.1
 
     observables = [qml.PauliX(0), qml.PauliX(1), qml.PauliY(2), qml.PauliZ(2) @ qml.PauliY(1)]
     params = [0.2, 1.4]
@@ -32,23 +32,89 @@ def two_observables_3_qubits_zassenhaus():
         qml.RY(params[1], wires=2)
         return qml.state()
 
-    costs_exact = approximate_lie_optimizer(circuit, params, observables, dev,
-                                            layers=[ZassenhausLayer(dev, observables)], eta=eta)
-    cmap = plt.cm.get_cmap('Set1')
+    ratio = (4, 2)
+    costs_exact, zassenhaus = approximate_lie_optimizer(circuit, params, observables, dev,
+                                            layers=[ZassenhausLayer(dev, observables, ratio=ratio)], eta=eta, return_zassenhaus=True)
     fig, axs = plt.subplots(1, 1)
     # axs.plot(costs_parameter_shift, label=r'PS', color=cmap(0.3), linewidth=LINEWIDTH)
-    axs.plot(costs_exact, label=r'Lie $SU(2^n)$', color=cmap(0.2), linewidth=LINEWIDTH)
+    axs.plot(np.abs(costs_exact - gs_en), label=r'Lie $SU(2^n)$', color='gray', linewidth=LINEWIDTH,
+             zorder=-1)
     axs.plot(range(len(costs_exact)), [gs_en for _ in range(len(costs_exact))], label='Minimum',
-             color='gray', linestyle='--', linewidth=LINEWIDTH - 1)
+             color='gray', linestyle='--', linewidth=LINEWIDTH - 1, zorder=-0.5)
+
+    firstsu2, firstsu4, firstsu8 = True, True, True
+
+    for i in range(len(zassenhaus)):
+        if zassenhaus[i] == 'su4':
+            if firstsu4:
+                axs.scatter(i, np.abs(np.abs(costs_exact[i] - gs_en)), color='crimson',
+                            linestyle='--',
+                            label='SU(4) layer', zorder=1)
+                firstsu4 = False
+            else:
+                axs.scatter(i, np.abs(costs_exact[i] - gs_en), color='crimson', linestyle='--',
+                            zorder=1)
+        elif zassenhaus[i] == 'su8':
+            if firstsu8:
+                axs.scatter(i, np.abs(costs_exact[i] - gs_en), color='navy', linestyle='--',
+                            label='Zass. SU(8) layer', zorder=1)
+                firstsu8 = False
+            else:
+                axs.scatter(i, np.abs(costs_exact[i] - gs_en), color='navy', linestyle='--',
+                            zorder=1)
+    axs.set_yscale('log')
     axs.legend()
     change_label_fontsize(axs, LABELSIZE)
     axs.set_xlabel('Step')
-    axs.set_ylabel(r'$\langle X_1 + X_2 \rangle$')
+    axs.set_ylabel(r'$\langle H \rangle$')
+    axs.set_title(fr'Ratio SU4: Zass. SU(8) = {ratio[0]}:{ratio[1]} ')
     plt.tight_layout()
     plt.savefig(
-        './figures' + f'/two_observable_local_lie_optimizers_ps_nq_{nqubits}_{eta:1.3f}.pdf')
+        './figures' + f'/su8_zass_optimizer_multi_obs_{nqubits}.pdf')
     plt.show()
 
+
+def two_observables_2_qubits_zassenhaus_v2():
+    nqubits = 2
+    dev = qml.device('default.qubit', wires=nqubits)
+    eta = 0.011
+
+    observables = [qml.PauliX(0), qml.PauliX(1), qml.PauliY(1)]
+    params = [0.6, 1.8,0.4]
+    # costs_parameter_shift = parameter_shift_optimizer(circuit, params, observables, dev, eta=eta)
+    H = get_hamiltonian_matrix(nqubits, observables)
+    print(np.linalg.eigvalsh(H))
+    gs_en = np.min(np.linalg.eigvalsh(H))
+
+    def circuit(params, **kwargs):
+        qml.Hadamard(wires=0)
+        qml.Hadamard(wires=1)
+        qml.RX(params[0], wires=0)
+        qml.RX(params[1], wires=1)
+        qml.CNOT(wires=[0, 1])
+        qml.RZ(params[2], wires=1)
+        qml.CNOT(wires=[0, 1])
+        return qml.state()
+
+    ratio = (4, 2)
+    costs_exact, zassenhaus = approximate_lie_optimizer(circuit, params, observables, dev,
+                                            layers=[ZassenhausLayerV2(dev, observables, ratio=ratio)], eta=eta, return_zassenhaus=True)
+    fig, axs = plt.subplots(1, 1)
+    # axs.plot(costs_parameter_shift, label=r'PS', color=cmap(0.3), linewidth=LINEWIDTH)
+    axs.plot(np.abs(costs_exact), label=r'Lie $SU(2^n)$', color='gray', linewidth=LINEWIDTH,
+             zorder=-1)
+    axs.plot(range(len(costs_exact)), [gs_en for _ in range(len(costs_exact))], label='Minimum',
+             color='gray', linestyle='--', linewidth=LINEWIDTH - 1, zorder=-0.5)
+
+    axs.legend()
+    change_label_fontsize(axs, LABELSIZE)
+    axs.set_xlabel('Step')
+    axs.set_ylabel(r'$\langle H \rangle$')
+    axs.set_title(fr'Ratio SU4: Zass. SU(8) = {ratio[0]}:{ratio[1]} ')
+    plt.tight_layout()
+    plt.savefig(
+        './figures' + f'/su8_zass_optimizer_multi_obs_{nqubits}.pdf')
+    plt.show()
 
 def tfim_zassenhaus(nqubits):
     dev = qml.device('default.qubit', wires=nqubits)
@@ -70,14 +136,15 @@ def tfim_zassenhaus(nqubits):
     H = get_hamiltonian_matrix(nqubits, observables)
     gs_en = np.min(np.linalg.eigvalsh(H))
     print(f'GS energy: {gs_en}')
-    ratio = (8,2) # -> (#SU4, #SU8 Zass)
+    ratio = (4,2) # -> (#SU4, #SU8 Zass)
     costs_exact, unitaries, zassenhaus = approximate_lie_optimizer(circuit, params, observables,
                                                                    dev,
                                                                    layers=[ZassenhausLayer(dev,
                                                                                            observables,ratio = ratio)],
                                                                    eta=eta,
                                                                    return_unitary=True,
-                                                                   return_zassenhaus=True)
+                                                                   return_zassenhaus=True,
+                                                                   tol=None, nsteps=50)
     fig, axs = plt.subplots(1, 1)
     # axs.plot(costs_parameter_shift, label=r'PS', color=cmap(0.3), linewidth=LINEWIDTH)
     axs.plot(np.abs(costs_exact-gs_en), label=r'Lie $SU(2^n)$', color='gray', linewidth=LINEWIDTH, zorder=-1)
@@ -144,5 +211,6 @@ def tfim_zassenhaus(nqubits):
 
 
 if __name__ == '__main__':
-    # two_observables_3_qubits_zassenhaus()
-    tfim_zassenhaus(6)
+    # two_observables_2_qubits_zassenhaus_v2()
+    two_observables_3_qubits_zassenhaus()
+    # tfim_zassenhaus(6)

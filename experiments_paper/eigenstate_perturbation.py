@@ -26,7 +26,7 @@ def two_observables_2_qubits():
         # qml.PauliZ(wires=1)
 
         # PERTURBATION
-        qml.RY(params[0], wires=0)
+        # qml.RY(params[0], wires=0)
 
         return qml.state()
 
@@ -86,6 +86,35 @@ def two_observables_2_qubits():
         change_label_fontsize(ax, LABELSIZE)
     fig.tight_layout()
     fig.savefig('./figures' + f'/eigenstate_perturbation.pdf')
+    plt.show()
+    fig, axs = plt.subplots(1,1)
+    fig.set_size_inches(6, 6)
+    cmap = plt.cm.get_cmap('Set2')
+
+    axs.plot(costs_exact_p, label=r'Lie $SU(2^n)$ Pert.', color=cmap(0.3), zorder=0,
+                linewidth=LINEWIDTH)
+    axs.plot(costs_exact_unp, label=r'Lie $SU(2^n)$', color=cmap(0.2), zorder=0,
+                linewidth=LINEWIDTH)
+    axs.plot(range(len(costs_exact_p)), [eigenvalues[0] for _ in range(len(costs_exact_p))],
+                label='Minimum',
+                color='black', linestyle='--', zorder=-1, linewidth=LINEWIDTH - 1)
+    axs.plot(range(len(costs_exact_p)), [eigenvalues[1] for _ in range(len(costs_exact_p))],
+                label='Eigenvalue 1',
+                color='gray', linestyle='--', zorder=-1, linewidth=LINEWIDTH - 1)
+    for i, p in enumerate(perturbations):
+        if i == 0:
+            axs.scatter(p, costs_exact_p[p], color=cmap(0.1), label='Perturbation', s=MARKERSIZE,
+                           zorder=1)
+        else:
+            axs.scatter(p, costs_exact_p[p], color=cmap(0.1), s=MARKERSIZE, zorder=1)
+
+    axs.legend()
+    axs.set_xlabel('Step')
+    axs.set_ylabel(r'$\langle X_1 +Y_1 + X_2 \rangle$')
+    # axs.set_title(fr'Different optimizers for $\eta = {eta}$')
+    change_label_fontsize(axs, LABELSIZE)
+    fig.tight_layout()
+    fig.savefig('./figures' + f'/eigenstate_perturbation_only.pdf')
     plt.show()
 
 

@@ -51,14 +51,18 @@ def dynamic_algebra_directed(graph):
     print(max_depth)
     identity = PauliMonomial([Pauli(loc, 0) for loc in range(3)])
     connections_added = 0
-    nodes_depth = [x for x,y in graph.nodes(data=True)]
-    for comb in it.product(nodes_depth,nodes_depth):
+    print(graph.nodes)
+    for comb in it.product(graph.nodes,graph.nodes):
         for p in comb:
             if not p in graph.nodes:
                 graph.add_node(comb[0], depth=max_depth+1)
         p_a_comm_b = comb[0].commutator(comb[1])
+        print(comb[0],'comm', comb[1])
+        print(p_a_comm_b)
         p_a_comm_b.coeff *= -0.5
         if not p_a_comm_b in graph.nodes and not np.isclose(p_a_comm_b.coeff, 0.0):
+            graph.add_edge(comb[0], comb[1])
+            graph.add_edge(comb[1], comb[0])
             graph.add_node(p_a_comm_b, depth=max_depth+1)
             if p_a_comm_b == identity:
                 if not graph.has_edge(comb[0], identity):
@@ -88,7 +92,7 @@ def generate_product_algebra_graph(algebra):
     return G
 
 def generate_product_algebra_digraph(algebra):
-    G = nx.DiGraph()
+    G = nx.MultiDiGraph()
     print('Generating product algebra graph...')
     for pauli in algebra:
         G.add_node(pauli, depth=0)
@@ -106,7 +110,8 @@ def plot_product_algebra_graph(graph, show=True):
 def main():
     paulis_A, paulis_B = SU4_to_SU8_algebra()
     # graph = generate_product_algebra_graph(paulis_A+paulis_B)
-    graph = generate_product_algebra_digraph(paulis_A+paulis_B)
+    graph = generate_product_algebra_digraph([paulis_A[np.random.randint(0,len(paulis_A))],
+                                             paulis_B[np.random.randint(0,len(paulis_A))]])
 
     plot_product_algebra_graph(graph)
 

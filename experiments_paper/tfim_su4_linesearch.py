@@ -37,7 +37,7 @@ observables = [qml.PauliX(i) for i in range(nqubits)] + \
               [qml.PauliZ(i) @ qml.PauliZ(i + 1) for i in range(nqubits - 1)] + \
               [qml.PauliZ(nqubits - 1) @ qml.PauliZ(0)]
 costs, params_out = parameter_shift_optimizer(circuit, params=init_params, observables=observables,
-                                              device=device, eta=0.01, nsteps=500, tol=1e-5,
+                                              device=device, eta=0.01, nsteps=100, tol=1e-5,
                                               return_params=True)
 
 
@@ -58,17 +58,23 @@ costs_exact, unitaries = approximate_lie_optimizer(circuit, params=init_params, 
 
 fig, axs = plt.subplots(1, 1)
 fig.set_size_inches(6, 6)
-axs.plot(costs, color=reds(0.7), label='VQE Opt.', linewidth=LINEWIDTH)
-axs.plot(costs_exact, color=blues(0.7), label='Riemann Opt.', linewidth=LINEWIDTH)
+axs.plot(np.abs(np.array(costs)-min(eigvals)), color=reds(0.7), label='VQE Opt.', linewidth=LINEWIDTH)
+axs.plot(np.abs(np.array(costs_exact)-min(eigvals)), color=blues(0.7), label='Riemann Opt.', linewidth=LINEWIDTH)
+# These are in unitless percentages of the figure size. (0,0 is bottom left)
+# left, bottom, width, height = [0.25, 0.6, 0.2, 0.2]
+# ax_inset = fig.add_axes([left, bottom, width, height])
+# ax_inset.plot(range(10), color='red')
+# ax_inset.plot(range(6)[::-1], color='green')
 axs.set_xlabel('Step')
-axs.set_ylabel(r'$\langle H \rangle$')
-axs.plot(range(max(len(costs), len(costs_exact))),
-         [-5.226251859505502 for _ in range(max(len(costs), len(costs_exact)))],
-         label='Minimum',
-         color='gray', linestyle='--', zorder=-1)
+axs.set_ylabel(r'$\epsilon_{res}$')
+# axs.plot(range(max(len(costs), len(costs_exact))),
+#          [min(eigvals) for _ in range(max(len(costs), len(costs_exact)))],
+#          label='Minimum',
+#          color='gray', linestyle='--', zorder=-1)
+axs.set_yscale('log')
 axs.legend()
 change_label_fontsize(axs, LABELSIZE)
-fig.savefig('./figures/tfim_su4_linesearch_comparison.pdf')
+fig.savefig('./figures/tfim_su4_linesearch_comparison.pdf',bbox_inches="tight")
 
 omegas = []
 if not os.path.exists('./data/tfim_su4'):
@@ -79,7 +85,7 @@ for i, uni in enumerate(unitaries):
     omegas.append(get_all_su_n_directions(uni, observables, device))
 
 fig1, ax = plt.subplots(1, 1)
-fig1.set_size_inches(8, 8)
+fig1.set_size_inches(6,6)
 cmap = plt.get_cmap('Reds')
 
 ax.plot(costs_exact, label=r'Lie $SU(2^n)$ Stoch.', color=cmap(0.3), zorder=-1)
@@ -88,5 +94,5 @@ ax.plot(range(len(costs_exact)), [np.min(eigvals) for _ in range(len(costs_exact
         color='gray', linestyle='--', zorder=-1)
 
 fig, axs = plot_su16_directions(nqubits, unitaries, observables, device)
-fig.savefig('./figures' + f'/su4_linesearch_optimizer_tfim_{nqubits}.pdf')
+fig.savefig('./figures' + f'/su4_linesearch_optimizer_tfim_{nqubits}.pdf',bbox_inches="tight")
 plt.show()
